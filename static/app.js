@@ -33,7 +33,11 @@ const activeStatuses = new Set(['queued', 'running', 'stopping']);
 const labels = {queued: 'Đang chờ trong hàng đợi', running: 'Đang xử lý', stopping: 'Đang dừng',
   completed: 'Hoàn tất', completed_with_errors: 'Hoàn tất, có lỗi', failed: 'Lỗi',
   stopped: 'Đã dừng', interrupted: 'Đã gián đoạn', pending: 'Đang chờ',
-  reading: 'Đang đọc', generating: 'Đang tạo', done: 'Đã tạo', skipped: 'Đã có quiz'};
+  merging: 'Đang ghép', reused: 'Dùng bản đã ghép', reading: 'Đang đọc',
+  generating: 'Đang tạo', done: 'Đã tạo', skipped: 'Đã có quiz'};
+const actionLabels = {
+  merge: 'Sẽ ghép', reuse: 'Dùng bản đã ghép', standalone: 'Tài liệu độc lập'
+};
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -54,6 +58,32 @@ function renderSkippedFiles() {
     item.title = path;
     item.append(icon('x'), node('span', '', path));
     list.append(item);
+  });
+}
+function renderDocumentPlan() {
+  const section = $('document-plan');
+  const container = $('document-plan-list');
+  const documents = state.preview?.documents || [];
+  container.replaceChildren();
+  section.hidden = !documents.length;
+  $('document-plan-count').textContent = documents.length ? `${documents.length} tài liệu` : '';
+  documents.forEach(document => {
+    const card = node('article', `plan-document ${document.action}`);
+    const heading = node('div', 'plan-document-heading');
+    heading.append(
+      node('strong', 'plan-document-name', document.output_path.split('/').pop()),
+      node('span', `plan-action ${document.action}`, actionLabels[document.action] || document.action),
+    );
+    const members = node('ul', 'plan-members');
+    document.members.forEach(member => {
+      const item = node('li');
+      item.title = member;
+      item.append(icon('file'), node('span', '', member.split('/').pop()));
+      members.append(item);
+    });
+    card.append(heading, members);
+    if (document.warning) card.append(node('p', 'plan-warning', document.warning));
+    container.append(card);
   });
 }
 async function api(url, options = {}) {
@@ -130,6 +160,7 @@ async function selectFiles(files) {
   }
 }
 function renderTree() {
+  renderDocumentPlan();
   $('original-view').classList.toggle('active', state.view === 'original');
   $('normalized-view').classList.toggle('active', state.view === 'normalized');
   $('tree-caption').textContent = state.view === 'original' ? 'ĐẦU RA' : 'INPUT KHÔNG DẤU';
@@ -206,7 +237,7 @@ function renderJob() {
   const percent = Math.round(processed / job.counts.total * 100);
   $('progress-percent').textContent = `${percent}%`; $('progress-fill').style.width = `${percent}%`;
   $('progress-track').setAttribute('aria-valuenow', String(percent));
-  const current = job.files.find(file => ['reading', 'generating'].includes(file.status));
+  const current = job.files.find(file => ['merging', 'reused', 'reading', 'generating'].includes(file.status));
   $('progress-label').textContent = current ? `${labels[current.status]}: ${current.path.split('/').pop()}`
     : job.status === 'queued' ? `Đang chờ đến lượt${job.queue_position ? ` · vị trí ${job.queue_position}` : ''}`
     : `${processed}/${job.counts.total} tài liệu đã xử lý${job.status === 'stopping' ? ' · Chờ file hiện tại hoàn thành' : ''}`;
@@ -220,8 +251,16 @@ function renderJob() {
   job.files.forEach(file => {
     const tr = node('tr'); const source = node('td'); const cell = node('div', 'file-cell');
     const symbol = node('span', 'file-symbol'); symbol.append(icon('file'));
-    const details = node('div'); const parts = file.path.split('/');
+    const displayPath = file.action === 'standalone' && file.members?.length === 1
+      ? file.members[0]
+      : file.path;
+    const details = node('div'); const parts = displayPath.split('/');
     details.append(node('strong', 'file-name', parts.pop()), node('span', 'file-parent', parts.join('/') || 'File đơn'));
+    if (file.action) details.append(node('span', `file-action ${file.action}`, actionLabels[file.action] || file.action));
+    if (file.members?.length > 1) details.append(
+      node('span', 'file-members', file.members.map(member => member.split('/').pop()).join(' + ')),
+    );
+    if (file.warning) details.append(node('p', 'file-warning', file.warning));
     if (file.error) details.append(node('p', 'file-error', file.error));
     cell.append(symbol, details); source.append(cell);
     const status = node('td'); status.append(statusBadge(file.status));

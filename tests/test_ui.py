@@ -86,8 +86,8 @@ def test_browser_folder_restores_tree_and_downloads_zip(ui_server, tmp_path, qui
             page.get_by_role('link', name='Tải toàn bộ ZIP').click()
         with ZipFile(BytesIO(open(download.value.path(), 'rb').read())) as archive:
             assert set(archive.namelist()) == {
-                'Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề.pdf.json',
-                'Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề <kiểm tra>.pdf.json',
+                'Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề.json',
+                'Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề <kiểm tra>.json',
             }
         page.reload()
         expect(page.locator('#job-status')).to_have_text('Hoàn tất')
@@ -112,5 +112,126 @@ def test_browser_single_file_unicode_and_mobile_layout(ui_server, tmp_path):
         assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
         with page.expect_download() as download:
             page.get_by_role('link', name='Tải JSON').click()
-        assert download.value.suggested_filename == source.name + '.json'
+        assert download.value.suggested_filename == source.with_suffix('.json').name
+        browser.close()
+
+class BlockingMerger:
+    def __init__(self):
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.calls = []
+
+    def merge(self, part1, part2, output):
+        from quiz_generator.pptx_merge import MergeResult
+
+        self.calls.append((part1, part2, output))
+        self.entered.set()
+        assert self.release.wait(timeout=10)
+        output.write_bytes(pptx_bytes_for_ui('Merged slide'))
+        return MergeResult(1, 1, 2)
+
+
+def pptx_bytes_for_ui(text='Slide'):
+    archive = BytesIO()
+    with ZipFile(archive, 'w') as zipfile:
+        zipfile.writestr(
+            'ppt/slides/slide1.xml',
+            '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+            f'<a:t>{text}</a:t></p:sld>',
+        )
+    return archive.getvalue()
+
+
+def make_pptx(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(pptx_bytes_for_ui(text))
+
+
+@pytest.fixture
+def ui_merge_server(tmp_path, quiz):
+    import uvicorn
+    from quiz_generator.llm import OllamaGenerator
+    from quiz_generator.web import create_app
+
+    merger = BlockingMerger()
+
+    def factory():
+        handler = lambda request: httpx.Response(
+            200,
+            json={'done': True, 'message': {'content': json.dumps(quiz)}},
+        )
+        return OllamaGenerator(
+            'ui-test-key',
+            'gemma4:31b',
+            'SYSTEM',
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            retry_delay=0,
+        )
+
+    config = tmp_path / '.env'
+    config.write_text('OLLAMA_API_KEY=ui-test-key\nLLM_MODEL_NAME=gemma4:31b\n')
+    app = create_app(
+        work_root=tmp_path / 'work',
+        output_root=tmp_path / 'output',
+        merged_root=tmp_path / 'merged',
+        merger=merger,
+        generator_factory=factory,
+        env_file=config,
+    )
+    sock = socket.socket()
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, log_level='error'))
+    thread = threading.Thread(target=lambda: server.run(sockets=[sock]), daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 5
+    while not server.started and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert server.started
+    yield f'http://127.0.0.1:{port}', merger
+    merger.release.set()
+    server.should_exit = True
+    thread.join(timeout=5)
+    sock.close()
+
+
+def test_browser_shows_one_merged_document_with_members_and_status(
+    ui_merge_server, tmp_path
+):
+    from playwright.sync_api import sync_playwright, expect
+
+    base_url, merger = ui_merge_server
+    root = tmp_path / 'Root'
+    part1 = root / 'Toan7/Bài 12/T36_1.pptx'
+    part2 = root / 'Toan7/Bài 12/T36_2.pptx'
+    make_pptx(part1, 'Part one')
+    make_pptx(part2, 'Part two')
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page(viewport={'width': 1440, 'height': 1080})
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.goto(base_url)
+        page.get_by_role('tab', name='Cả thư mục').click()
+        page.locator('#folder-input').set_input_files(str(root))
+
+        expect(page.locator('#document-plan .plan-document')).to_have_count(1)
+        expect(page.locator('#document-plan')).to_contain_text('Sẽ ghép')
+        expect(page.locator('#document-plan')).to_contain_text('T36_1.pptx')
+        expect(page.locator('#document-plan')).to_contain_text('T36_2.pptx')
+
+        page.get_by_role('button', name='Bắt đầu tạo quiz').click()
+        assert merger.entered.wait(timeout=5)
+        expect(page.locator('#file-table')).to_contain_text('Đang ghép', timeout=5000)
+        merger.release.set()
+        expect(page.locator('#job-status')).to_have_text('Hoàn tất', timeout=15000)
+        expect(page.locator('#file-table tbody tr')).to_have_count(1)
+        expect(page.get_by_role('link', name='Tải JSON')).to_have_count(1)
+        assert len(merger.calls) == 1
+        assert {merger.calls[0][0].name, merger.calls[0][1].name} == {
+            'T36_1.pptx', 'T36_2.pptx',
+        }
+        assert errors == []
         browser.close()
