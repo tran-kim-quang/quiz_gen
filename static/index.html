@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#6154da">
+  <title>Quiz Studio · Từ bài học đến bài kiểm tra</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236154da'/%3E%3Cpath d='M10 10h12v12H10z' fill='white'/%3E%3Cpath d='m14 16 2 2 4-5' fill='none' stroke='%236154da' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="Quiz Studio trang chủ">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+      <span>Quiz<span class="brand-light">Studio</span><small>KHÔNG GIAN BIÊN SOẠN</small></span>
+    </a>
+    <div class="nav-label">WORKSPACE</div>
+    <a class="nav-item selected" href="#source-panel"><span data-icon="sparkles"></span>Tạo quiz<span class="nav-dot"></span></a>
+    <button class="nav-item" id="help-button"><span data-icon="book"></span>Hướng dẫn</button>
+    <div class="recent-section">
+      <div class="nav-label">LƯỢT GẦN ĐÂY <span id="history-count">0</span></div>
+      <div id="recent-jobs"><p class="recent-empty">Các lượt xử lý sẽ được lưu ở đây.</p></div>
+    </div>
+    <div class="sidebar-note"><span data-icon="layers"></span><strong>Một bài học.<br>Nhiều điều để khám phá.</strong><p>Tạo 10 câu hỏi từ chính<br>tài liệu của bạn.</p></div>
+    <div class="sidebar-footer"><span class="small-dot"></span>Chạy trên máy của bạn <span>v1.0</span></div>
+  </aside>
+
+  <div class="workspace">
+    <header class="topbar">
+      <div class="breadcrumb">Workspace <span>/</span> <strong>Tạo quiz</strong></div>
+      <div class="model-pill" id="model-pill"><span class="small-dot"></span><span id="model-name">Đang đọc cấu hình…</span><span class="model-caption" id="model-caption"></span></div>
+    </header>
+    <main>
+      <div class="page-heading">
+        <div><div class="eyebrow">TỪ TÀI LIỆU ĐẾN TRI THỨC</div><h1>Bài học vào. <span>Quiz sẵn sàng.</span></h1><p>Chọn tài liệu của bạn, tạo bài kiểm tra và giữ nguyên cách bạn sắp xếp bài học.</p></div>
+        <div class="heading-badge"><span data-icon="check-circle"></span><span>10 câu hỏi<small>mỗi tài liệu</small></span></div>
+      </div>
+      <div class="steps" aria-label="Các bước tạo quiz">
+        <div class="step active" id="step-source"><span>01</span>Chọn nguồn</div><div class="step-line"></div>
+        <div class="step" id="step-process"><span>02</span>Tạo câu hỏi</div><div class="step-line"></div>
+        <div class="step" id="step-results"><span>03</span>Nhận quiz</div>
+      </div>
+      <div id="notice" class="notice" role="alert" hidden></div>
+
+      <section class="source-layout" id="source-panel">
+        <div class="card upload-card">
+          <div class="card-heading"><div><span class="section-label">01 / NGUỒN TÀI LIỆU</span><h2>Bắt đầu từ bài học của bạn</h2></div><button class="icon-button" id="reset-button" title="Làm mới nguồn" aria-label="Làm mới nguồn"><span data-icon="refresh"></span></button></div>
+          <div class="input-tabs" role="tablist" aria-label="Loại input">
+            <button id="file-tab" role="tab" aria-selected="true" aria-controls="source-picker"><span data-icon="file"></span>Một file</button>
+            <button id="folder-tab" role="tab" aria-selected="false" aria-controls="source-picker"><span data-icon="folder"></span>Cả thư mục</button>
+          </div>
+          <div id="source-picker" role="tabpanel" aria-labelledby="file-tab">
+            <input id="file-input" type="file" accept=".pdf,.pptx" aria-label="Chọn một file PDF hoặc PPTX" hidden>
+            <input id="folder-input" type="file" webkitdirectory multiple aria-label="Chọn folder có thư mục con" hidden>
+            <button class="drop-zone" id="choose-button" type="button">
+              <span class="upload-illustration" aria-hidden="true"><span data-icon="upload"></span><span class="mini-plus">+</span></span>
+              <strong id="picker-heading">Thả tài liệu vào đây</strong>
+              <span id="picker-description">hoặc chọn một file từ máy tính</span>
+              <span class="choose-label" id="choose-label">Chọn file <span data-icon="arrow-right"></span></span>
+              <small id="picker-limit">PDF hoặc PPTX · Không giới hạn số lượng</small>
+            </button>
+          </div>
+          <div class="selection-strip"><span class="selection-icon" data-icon="file"></span><div><strong id="selection-summary">Chưa chọn tài liệu</strong><span id="selection-size">Một file hoặc một thư mục chứa nhiều bài học</span></div><span id="selection-check" data-icon="check-circle" hidden></span></div>
+          <p id="selection-note" class="selection-note" aria-live="polite"></p>
+          <section id="skipped-files" class="skipped-files" aria-labelledby="skipped-files-title" hidden>
+            <div class="skipped-files-heading"><strong id="skipped-files-title">File bị bỏ qua</strong><span id="skipped-files-count"></span></div>
+            <ul id="skipped-files-list"></ul>
+          </section>
+          <div class="upload-footer"><span data-icon="shield-check"></span>Tên và nội dung tài liệu gốc được giữ nguyên.</div>
+        </div>
+
+        <div class="card tree-card">
+          <div class="card-heading"><div><span class="section-label">CẤU TRÚC THƯ MỤC</span><h2>Mọi bài học, đúng vị trí</h2></div><span class="soft-icon" data-icon="folder-tree"></span></div>
+          <p class="card-description">Quiz được xuất theo đúng các cấp thư mục bạn chọn.</p>
+          <div class="tree-toolbar"><span id="tree-caption">ĐẦU RA</span><div class="view-toggle"><button id="original-view" class="active">Tên gốc</button><button id="normalized-view">Tên xử lý</button></div></div>
+          <div class="path-tree" id="path-tree"><div class="tree-empty"><span data-icon="folder-tree"></span><strong>Cây thư mục của bạn</strong><p>Chọn nguồn để xem trước<br>vị trí của từng file quiz.</p></div></div>
+          <div class="mapping-note"><span data-icon="arrow-left-right"></span><p>Không dấu khi xử lý.<br><strong>Đúng tên gốc khi xuất kết quả.</strong></p><span class="preserve-badge">GIỮ NGUYÊN DẤU</span></div>
+        </div>
+      </section>
+
+      <div class="start-bar"><p><span data-icon="sparkles"></span>Nhiều tài liệu được xếp hàng và xử lý tuần tự</p><button class="primary-button" id="start-button" disabled><span data-icon="sparkles"></span><span id="start-label">Bắt đầu tạo quiz</span><span data-icon="arrow-right"></span></button></div>
+
+      <section class="card results-card" id="results-panel">
+        <div class="card-heading"><div><span class="section-label">02 / QUÁ TRÌNH & KẾT QUẢ</span><h2>Quiz của bạn</h2></div><div class="result-actions"><button id="stop-button" class="secondary-button" hidden><span data-icon="square"></span>Dừng sau file này</button><a id="zip-download" class="secondary-button" aria-disabled="true" tabindex="-1"><span data-icon="download"></span>Tải toàn bộ ZIP</a></div></div>
+        <div id="results-empty" class="results-empty"><span class="empty-check" data-icon="list-check"></span><div><strong>Sẵn sàng cho bài kiểm tra tiếp theo</strong><p>Các lượt upload được xếp hàng; tài liệu được xử lý lần lượt.</p></div><span class="empty-tag">FIFO · TUẦN TỰ</span></div>
+        <div id="job-content" hidden>
+          <div class="job-topline"><strong id="job-name"></strong><span class="status-badge" id="job-status" aria-live="polite"></span></div>
+          <div class="stats"><div><span>TÀI LIỆU</span><strong id="total-count">0</strong></div><div><span>QUIZ HOÀN THÀNH</span><strong id="done-count">0</strong></div><div><span>CẦN XEM LẠI</span><strong id="failed-count">0</strong></div><div class="stats-note"><span data-icon="layers"></span><p>Xử lý lần lượt<br>từng bài học</p></div></div>
+          <div class="progress-heading"><span id="progress-label" aria-live="polite"></span><strong id="progress-percent">0%</strong></div>
+          <div class="progress-track" role="progressbar" aria-label="Tiến độ xử lý" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress-track"><div id="progress-fill"></div></div>
+          <div id="job-error" class="notice" hidden></div>
+          <div class="table-scroll"><table id="file-table"><thead><tr><th>TÀI LIỆU THAM CHIẾU</th><th>TRẠNG THÁI</th><th class="action-heading">KẾT QUẢ</th></tr></thead><tbody></tbody></table></div>
+        </div>
+      </section>
+      <footer class="page-footer"><span>Được biên soạn từ nguồn của bạn.</span><span>Xem lại nội dung quiz trước khi dùng cho học sinh.</span></footer>
+    </main>
+  </div>
+
+  <dialog id="quiz-dialog" class="quiz-dialog" aria-labelledby="quiz-title"><div class="dialog-heading"><span class="section-label">XEM QUIZ</span><button class="icon-button" id="close-quiz" aria-label="Đóng xem quiz"><span data-icon="x"></span></button></div><h2 id="quiz-title"></h2><p id="quiz-description"></p><div id="quiz-questions"></div><div class="dialog-footer"><a id="modal-download" class="primary-button">Tải JSON <span data-icon="download"></span></a></div></dialog>
+  <dialog id="help-dialog" class="help-dialog" aria-labelledby="help-title"><div class="dialog-heading"><span class="section-label">HƯỚNG DẪN NHANH</span><button class="icon-button" id="close-help" aria-label="Đóng hướng dẫn"><span data-icon="x"></span></button></div><h2 id="help-title">Ba bước để có quiz của bạn</h2><ol><li><strong>Chọn nguồn.</strong> Dùng Một file cho một PDF/PPTX, hoặc Cả thư mục để lấy tài liệu trong mọi thư mục con.</li><li><strong>Bắt đầu tạo quiz.</strong> Mỗi tài liệu được xử lý lần lượt. Bạn có thể dừng sau file đang chạy và tải các quiz đã xong.</li><li><strong>Xem và tải kết quả.</strong> Xem trước từng quiz, tải riêng JSON hoặc tải toàn bộ ZIP với cây thư mục và tên có dấu nguyên bản.</li></ol><p class="help-note">Chỉ tên bản làm việc được bỏ dấu. Tài liệu gốc và tên thư mục trong output được giữ nguyên; các tên trùng sau khi bỏ dấu vẫn được phân biệt.</p></dialog>
+</body>
+</html>

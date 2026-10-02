@@ -1,0 +1,8 @@
+.env
+.venv/
+documents/
+__pycache__/
+.pytest_cache/
+outputs/
+.quiz-ui/
+*.pyc
