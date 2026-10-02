@@ -266,6 +266,34 @@ def test_cli_generates_one_json_for_existing_merged_pair(tmp_path, quiz):
     assert not (output / 'Toan7/Bài 12/T36/T36_2.json').exists()
 
 
+def test_cli_logs_source_merge_fallback_diagnostic(tmp_path, quiz):
+    source = tmp_path / 'documents'
+    merged = tmp_path / 'merged'
+    output = tmp_path / 'output'
+    lesson = source / 'Toan7/Bài 12'
+    pptx(lesson / 'T36_1.pptx', 'Part one')
+    pptx(lesson / 'T36_2.pptx', 'Part two')
+    requests = []
+    server = quiz_server(quiz, requests)
+    try:
+        result = subprocess.run([
+            sys.executable, str(SCRIPT),
+            '--documents', str(source),
+            '--merged-documents', str(merged),
+            '--output', str(output),
+            '--env-file', str(cli_env_file(tmp_path, server.server_port)),
+        ], capture_output=True, text=True, env=clean_env(), timeout=10)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert result.returncode == 0, result.stderr
+    assert 'PPTX thiếu presentation.xml hoặc relationships' in result.stderr
+    assert (output / 'Toan7/Bài 12/T36/T36_1.json').is_file()
+    assert (output / 'Toan7/Bài 12/T36/T36_2.json').is_file()
+    assert len(requests) == 2
+
+
 def test_watch_replans_when_second_part_arrives(tmp_path, quiz):
     source = tmp_path / 'documents'
     merged = tmp_path / 'merged'

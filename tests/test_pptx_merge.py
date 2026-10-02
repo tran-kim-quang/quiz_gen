@@ -157,6 +157,10 @@ def test_existing_target_is_reused_without_worker(tmp_path):
         'event': 'reused',
         'state_key': plan.documents[0].state_key,
         'warning': '',
+        'members': [
+            member.original_path for member in plan.documents[0].members
+        ],
+        'destination': str(destination),
     }]
 
 
@@ -219,6 +223,26 @@ def test_temporary_output_is_atomic_and_cleaned(tmp_path):
     assert [event['event'] for event in events] == ['merging', 'merged']
     assert all(event['state_key'] == plan.documents[0].state_key for event in events)
     assert all(event['warning'] == '' for event in events)
+
+
+def test_materializer_events_include_members_destination_and_slide_counts(tmp_path):
+    plan = paired_plan(tmp_path)
+    events = []
+
+    api().PptxMaterializer(RecordingMerger()).materialize(plan, events.append)
+
+    expected_members = [
+        member.original_path for member in plan.documents[0].members
+    ]
+    assert events[0]['members'] == expected_members
+    assert events[0]['destination'] == str(plan.documents[0].source_path)
+    assert events[1]['members'] == expected_members
+    assert events[1]['destination'] == str(plan.documents[0].source_path)
+    assert events[1]['slide_counts'] == {
+        'part1': 1,
+        'part2': 1,
+        'output': 2,
+    }
 
 
 def test_resolved_output_cannot_escape_merged_root(tmp_path):

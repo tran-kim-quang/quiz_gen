@@ -129,13 +129,24 @@ class PptxMaterializer:
         final_documents = []
         final_issues = list(plan.issues)
 
-        def emit(event, document, warning=''):
+        def emit(event, document, warning='', result=None):
             if on_event is not None:
-                on_event({
+                payload = {
                     'event': event,
                     'state_key': document.state_key,
                     'warning': warning,
-                })
+                    'members': [
+                        member.original_path for member in document.members
+                    ],
+                    'destination': str(document.source_path),
+                }
+                if result is not None:
+                    payload['slide_counts'] = {
+                        'part1': result.part1_slides,
+                        'part2': result.part2_slides,
+                        'output': result.output_slides,
+                    }
+                on_event(payload)
 
         for document in plan.documents:
             if document.kind != 'merged':
@@ -171,7 +182,7 @@ class PptxMaterializer:
                 temporary = Path(temporary_name)
                 emit('merging', document, document.warning)
                 try:
-                    self.merger.merge(
+                    merge_result = self.merger.merge(
                         document.members[0].path,
                         document.members[1].path,
                         temporary,
@@ -201,7 +212,7 @@ class PptxMaterializer:
 
                 if destination.is_file():
                     final_documents.append(document)
-                    emit('merged', document, document.warning)
+                    emit('merged', document, document.warning, merge_result)
 
         return DocumentPlan(
             documents=tuple(final_documents),

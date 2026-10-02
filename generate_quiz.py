@@ -99,6 +99,22 @@ def main(argv=None) -> int:
         generator = create_generator(args.env_file)
         materializer = PptxMaterializer(NodePptxMerger())
 
+        def log_merge_event(event):
+            members = ', '.join(event.get('members', ()))
+            counts = event.get('slide_counts')
+            count_text = (
+                f"; slide {counts['part1']} + {counts['part2']} = {counts['output']}"
+                if counts else ''
+            )
+            warning = event.get('warning', '')
+            message = (
+                f"Ghép PPTX [{event['event']}] {event['state_key']}: "
+                f"{members} -> {event.get('destination', '')}{count_text}"
+            )
+            (LOG.warning if warning else LOG.info)(
+                '%s%s', message, f'; {warning}' if warning else ''
+            )
+
         def provide_documents():
             current = build_plan(paths)
             fatal = [issue for issue in current.issues if issue.fatal]
@@ -108,9 +124,7 @@ def main(argv=None) -> int:
                 LOG.warning('%s', issue.message)
             result = materializer.materialize(
                 current,
-                lambda event: LOG.info(
-                    'Ghép PPTX [%s]: %s', event['event'], event['state_key']
-                ),
+                log_merge_event,
             )
             return result.documents
 
