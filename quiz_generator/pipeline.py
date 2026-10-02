@@ -10,9 +10,9 @@ from pathlib import Path
 import tempfile
 import time
 
-from .documents import discover_documents, read_document
+from .documents import Document, discover_documents, read_document
 from .llm import FatalAPIError, validate_quiz
-from .inputs import validate_relative_path, validate_output_paths
+from .inputs import plan_source_units, validate_relative_path
 
 LOG = logging.getLogger(__name__)
 
@@ -75,7 +75,8 @@ class RunSummary:
 class QuizRunner:
     def __init__(self, documents_root: Path, output_root: Path, generator, *,
                  reader_options=None, failure_cooldown: float = 300,
-                 path_mapping=None, on_progress=None, stop_event=None):
+                 path_mapping=None, on_progress=None, stop_event=None,
+                 group_leaf_folders: bool = True):
         self.documents_root = documents_root.resolve()
         self.output_root = output_root.resolve()
         self.generator = generator
@@ -86,7 +87,7 @@ class QuizRunner:
             for normalized, original in self.path_mapping.items():
                 validate_relative_path(normalized)
                 validate_relative_path(original)
-            validate_output_paths(list(self.path_mapping.values()))
+        self.group_leaf_folders = group_leaf_folders
         self.on_progress = on_progress
         self.stop_event = stop_event
         self.state_path = self.output_root / '.quiz-state.json'
@@ -102,19 +103,29 @@ class QuizRunner:
             except (ValueError, OSError):
                 LOG.warning('State không đọc được; sẽ kiểm tra và xử lý lại các tài liệu.')
 
-    def _fingerprint(self, path: Path) -> str:
+    def _plans(self):
+        paths = discover_documents(self.documents_root)
+        relatives = tuple(path.relative_to(self.documents_root).as_posix() for path in paths)
+        return plan_source_units(
+            relatives, self.path_mapping, group_leaf_folders=self.group_leaf_folders,
+            root_name=self.documents_root.name,
+        )
+
+    def _fingerprint(self, plan) -> str:
         context = {
             'source_root': str(self.documents_root), 'model': self.generator.model,
             'prompt': self.generator.system_prompt, 'base_url': self.generator.base_url,
             'temperature': self.generator.temperature, 'max_tokens': self.generator.max_tokens,
-            'reader': self.reader_options, 'pipeline_version': 1,
+            'reader': self.reader_options, 'pipeline_version': 2,
+            'group_leaf_folders': self.group_leaf_folders,
+            'sources': plan.original_paths,
         }
-        if self.path_mapping is not None:
-            context['original_path'] = self.path_mapping[path.relative_to(self.documents_root).as_posix()]
         digest = hashlib.sha256(json.dumps(context, sort_keys=True).encode('utf-8'))
-        with path.open('rb') as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
-                digest.update(chunk)
+        for relative in plan.relative_paths:
+            digest.update(relative.encode('utf-8'))
+            with (self.documents_root / relative).open('rb') as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                    digest.update(chunk)
         return digest.hexdigest()
 
     def _done(self, output: Path, entry: dict, fingerprint: str, relative: str) -> bool:
@@ -127,55 +138,81 @@ class QuizRunner:
             return False
 
     def has_unresolved_failures(self) -> bool:
-        return any(entry.get('status') == 'failed' and (self.documents_root / relative).is_file()
-                   for relative, entry in self.state['files'].items())
+        return any(entry.get('status') == 'failed' and any(
+            (self.documents_root / relative).is_file()
+            for relative in entry.get('sources', (key,))
+        ) for key, entry in self.state['files'].items())
 
     def _emit(self, relative: str, status: str, **details):
         if self.on_progress is not None:
             self.on_progress({'path': relative, 'status': status, **details})
 
+    def _read_group(self, plan) -> Document:
+        texts, images = [], []
+        pages = 0
+        for index, relative in enumerate(plan.relative_paths, 1):
+            document = read_document(self.documents_root / relative, **self.reader_options)
+            pages += document.page_count
+            images.extend(document.images)
+            texts.append(f'--- TÀI LIỆU {index}: {relative} ---\n{document.text}')
+        max_pages = self.reader_options.get('max_pages', 80)
+        max_chars = self.reader_options.get('max_chars', 200_000)
+        max_image_bytes = self.reader_options.get('max_image_bytes', 20_000_000)
+        text = '\n\n'.join(texts)
+        if pages > max_pages:
+            raise ValueError(f'Nhóm tài liệu có {pages} trang/slide, vượt giới hạn {max_pages}.')
+        if len(text) > max_chars:
+            raise ValueError(f'Nhóm tài liệu có {len(text)} ký tự, vượt giới hạn {max_chars}.')
+        image_bytes = sum(len(value) for value in images)
+        if image_bytes > max_image_bytes:
+            raise ValueError(f'Ảnh của nhóm tài liệu vượt giới hạn {max_image_bytes} bytes.')
+        return Document(text=text, images=images, page_count=pages)
+
     def run_once(self, *, force: bool = False, limit: int | None = None) -> RunSummary:
         summary = RunSummary()
-        for path in discover_documents(self.documents_root):
+        for plan in self._plans():
             if self.stop_event is not None and self.stop_event.is_set():
                 break
             if limit is not None and summary.attempted >= limit:
                 break
-            relative = path.relative_to(self.documents_root).as_posix()
-            original = self.path_mapping[relative] if self.path_mapping is not None else relative
-            output = self.output_root / (original + '.json')
+            relative = plan.key
+            output = self.output_root / plan.output
             entry = self.state['files'].get(relative, {})
             fingerprint = None
             try:
-                fingerprint = self._fingerprint(path)
-                if not force and self._done(output, entry, fingerprint, relative):
+                fingerprint = self._fingerprint(plan)
+                if not force and self._done(output, entry, fingerprint, plan.validation_path):
                     summary.skipped += 1
-                    self._emit(relative, 'skipped', output=original + '.json')
+                    self._emit(relative, 'skipped', output=plan.output,
+                               sources=list(plan.original_paths))
                     continue
                 if (not force and entry.get('status') == 'failed'
                         and entry.get('fingerprint') == fingerprint
                         and entry.get('retry_at', 0) > time.time()):
                     summary.deferred += 1
                     continue
-                LOG.info('Đang tạo quiz: %s', relative)
-                self._emit(relative, 'reading')
-                document = read_document(path, **self.reader_options)
-                LOG.info('Nguồn: %d trang/slide, %d ảnh, %d ký tự text.',
-                         document.page_count, len(document.images), len(document.text))
+                LOG.info('Đang tạo quiz từ folder lá: %s (%d tài liệu).', relative, len(plan.relative_paths))
+                self._emit(relative, 'reading', sources=list(plan.original_paths))
+                document = self._read_group(plan)
+                LOG.info('Nguồn: %d tài liệu, %d trang/slide, %d ảnh, %d ký tự text.',
+                         len(plan.relative_paths), document.page_count, len(document.images), len(document.text))
                 self._emit(relative, 'generating', pages=document.page_count)
-                quiz = self.generator.generate(document, relative)
-                if fingerprint != self._fingerprint(path):
+                quiz = self.generator.generate(document, plan.validation_path,
+                                                source_paths=plan.relative_paths)
+                if fingerprint != self._fingerprint(plan):
                     raise ValueError('Tài liệu thay đổi trong khi sinh quiz; sẽ xử lý lại phiên bản mới.')
                 # Validate again at the persistence boundary.
-                validate_quiz(json.dumps(quiz, ensure_ascii=False), relative)
+                validate_quiz(json.dumps(quiz, ensure_ascii=False), plan.validation_path)
                 atomic_json(output, quiz)
                 self.state['files'][relative] = {
                     'fingerprint': fingerprint, 'status': 'done',
+                    'sources': list(plan.relative_paths),
                     'output': str(output.relative_to(self.output_root)), 'updated_at': time.time(),
                 }
                 summary.generated += 1
                 LOG.info('Đã lưu: %s', output)
-                event = {'status': 'done', 'output': original + '.json'}
+                event = {'status': 'done', 'output': plan.output,
+                         'sources': list(plan.original_paths)}
             except FatalAPIError:
                 raise
             except Exception as error:
@@ -183,6 +220,7 @@ class QuizRunner:
                 LOG.error('Không xử lý được %s: %s', relative, error)
                 self.state['files'][relative] = {
                     'fingerprint': fingerprint, 'status': 'failed',
+                    'sources': list(plan.relative_paths),
                     'error_type': type(error).__name__, 'retry_at': time.time() + self.failure_cooldown,
                 }
                 summary.failed += 1

@@ -1,6 +1,6 @@
 # LLM Quiz Generator
 
-Sinh quiz bằng model và API key trong `.env`, dùng nguyên `sys_prompt` trong `prompt.py`. Mỗi lần sinh chỉ tham chiếu **một tài liệu**. Script quét đệ quy `documents`, xử lý tuần tự từng file khác nhau, kiểm tra JSON rồi lưu theo đúng cây thư mục nguồn.
+Sinh quiz bằng model và API key trong `.env`, dùng nguyên `sys_prompt` trong `prompt.py`. Script quét đệ quy `documents`, tìm các **folder lá** (folder không còn folder con), rồi dùng toàn bộ PDF/PPTX trực tiếp trong từng folder lá để sinh một quiz. Mỗi request LLM chỉ chứa dữ liệu của đúng một folder lá.
 
 ## Giao diện Quiz Studio
 
@@ -13,12 +13,12 @@ Sau khi cài dependencies, chạy:
 Mở **http://127.0.0.1:8000**. Có thể đổi port với `--port 8001`, hoặc dùng file cấu hình khác với `--env-file /path/.env`.
 
 1. Chọn **Một file** để tải một PDF/PPTX, hoặc **Cả thư mục** để tải các tài liệu trong folder và toàn bộ folder con.
-2. Xem cây thư mục ở **Tên gốc** hoặc **Tên xử lý**, rồi bấm **Bắt đầu tạo quiz**. Mỗi file được sinh lần lượt.
-3. Theo dõi trạng thái từng tài liệu, bấm **Xem quiz**, tải JSON riêng hoặc **Tải toàn bộ ZIP**.
+2. Xem cây thư mục ở **Tên gốc** hoặc **Tên xử lý**, rồi bấm **Bắt đầu tạo quiz**. Mỗi folder lá được sinh lần lượt theo số `T`.
+3. Theo dõi trạng thái từng folder lá, bấm **Xem quiz**, tải JSON riêng hoặc **Tải toàn bộ ZIP**.
 
-Nút **Dừng sau file này** cho file đang gọi LLM hoàn thành rồi dừng hàng đợi. Các quiz đã xong vẫn tải được. Reload tab giữ lại lượt gần nhất; sidebar lưu các lượt gần đây. Nếu server khởi động lại giữa lượt, lượt đó được đánh dấu gián đoạn và kết quả hoàn thành vẫn được giữ.
+Nút **Dừng sau folder này** cho folder đang gọi LLM hoàn thành rồi dừng hàng đợi. Các quiz đã xong vẫn tải được. Reload tab giữ lại lượt gần nhất; sidebar lưu các lượt gần đây. Nếu server khởi động lại giữa lượt, lượt đó được đánh dấu gián đoạn và kết quả hoàn thành vẫn được giữ.
 
-Giao diện dùng cùng `.env` và `prompt.py` với CLI; không đưa API key lên trình duyệt. Có thể upload thêm file/folder khi một lượt đang chạy: mỗi batch mới vào hàng đợi FIFO, và toàn hệ thống chỉ gọi LLM cho một tài liệu tại một thời điểm.
+Giao diện dùng cùng `.env` và `prompt.py` với CLI; không đưa API key lên trình duyệt. Có thể upload thêm file/folder khi một lượt đang chạy: mỗi batch mới vào hàng đợi FIFO, và toàn hệ thống chỉ gọi LLM cho một folder lá tại một thời điểm.
 
 ### Normalize tên và giữ đúng dấu khi xuất
 
@@ -27,29 +27,31 @@ Giao diện **copy** nguồn vào vùng làm việc, bỏ dấu trong từng tê
 ```text
 Input bạn chọn:
 Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề.pdf
+Lớp 7/Môn/Toán/Bài 12/Tiết 36/Bài tập.pptx
 
 Bản làm việc:
 Lop 7/Mon/Toan/Bai 12/Tiet 36/De.pdf
+Lop 7/Mon/Toan/Bai 12/Tiet 36/Bai tap.pptx
 
 Output trên đĩa:
-outputs/ui/<job-id>/Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề.pdf.json
+outputs/ui/<job-id>/Lớp 7/Môn/Toán/Bài 12/Tiết 36/Tiết 36.json
 
 Bên trong ZIP:
-Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề.pdf.json
+Lớp 7/Môn/Toán/Bài 12/Tiết 36/Tiết 36.json
 ```
 
 Bảng ánh xạ được lưu tại `.quiz-ui/jobs/<job-id>/path-mapping.json`. Output lấy lại **tên gốc chính xác** từ bảng này, kể cả Unicode tổ hợp; không đoán ngược dấu từ tên đã normalize. Nếu các tên như `Má` và `Ma` trùng sau bỏ dấu, bản làm việc thêm suffix riêng, còn output vẫn giữ tên gốc.
 
-Chế độ File đơn giữ basename gốc khi xuất, không thêm folder từ máy tính. Chế độ Folder giữ cả tên folder gốc đã chọn và mọi cấp con có tài liệu. ZIP chỉ chứa JSON quiz, không chứa input, state hoặc key.
+Chế độ File đơn giữ basename gốc khi xuất, không thêm folder từ máy tính. Chế độ Folder tạo một JSON mang tên folder lá, giữ cả tên folder gốc đã chọn và mọi cấp con. ZIP chỉ chứa JSON quiz, không chứa input, state hoặc key.
 
 Ứng dụng không đặt giới hạn số file hoặc tổng dung lượng upload. Khả năng thực tế phụ thuộc dung lượng ổ đĩa, bộ nhớ, giới hạn HTTP/trình duyệt và context của model. Folder có file khác PDF/PPTX sẽ bỏ qua các file đó và thông báo số lượng. Cây thư mục không thể lưu output do tên file/thư mục xung đột sẽ được báo trước khi gọi LLM. Nút chọn folder nên dùng Chrome/Edge/Firefox bản mới hỗ trợ directory picker.
 
 Khi upload nhiều:
 
 - Từng batch hiện trạng thái **Đang chờ trong hàng đợi** và vị trí FIFO.
-- Trong một batch, tài liệu được xử lý lần lượt theo đường dẫn đã normalize.
+- Trong một batch, các folder lá được xử lý lần lượt theo số `T` tăng dần; folder không có số `T` dùng thứ tự tên tự nhiên.
 - Batch tiếp theo chỉ bắt đầu sau khi batch hiện tại hoàn thành hoặc dừng.
-- Có thể huỷ một batch đang chờ mà không gọi LLM; với batch đang chạy, nút dừng hoàn tất file hiện tại rồi ngừng.
+- Có thể huỷ một batch đang chờ mà không gọi LLM; với batch đang chạy, nút dừng hoàn tất folder hiện tại rồi ngừng.
 
 ## Cài đặt
 
@@ -109,7 +111,7 @@ python generate_quiz.py --help
 
 ## Input và output
 
-Hỗ trợ `.pdf` và `.pptx`, kể cả đuôi viết hoa, ở mọi cấp thư mục. Không gộp nhiều tài liệu vào cùng quiz.
+Hỗ trợ `.pdf` và `.pptx`, kể cả đuôi viết hoa, ở mọi cấp thư mục. Toàn bộ tài liệu trực tiếp trong cùng một folder lá được gộp làm nguồn cho một quiz. Không đặt tài liệu trực tiếp trong folder vẫn còn folder con; ứng dụng sẽ báo lỗi cấu trúc thay vì âm thầm bỏ qua.
 
 ```text
 documents/
@@ -121,17 +123,16 @@ outputs/
 ├── .quiz-state.json
 ├── .quiz-worker.lock
 └── Lop/Lop7/Mon/Toan7/Bai12/Tiet36/
-    ├── lesson.pdf.json
-    └── TOAN7_C4_B12_T36_2_fixed.pptx.json
+    └── Tiet36.json
 ```
 
-Giữ cả đuôi nguồn trong tên JSON để `lesson.pdf` và `lesson.pptx` không ghi đè nhau. Không suy diễn hoặc đổi tên các cấp thư mục; mọi cấp lớp/môn/[Môn học]/[Bài]/[Tiết] được giữ nguyên.
+Tên JSON lấy theo folder lá. Không suy diễn hoặc đổi tên các cấp thư mục; mọi cấp lớp/môn/[Môn học]/[Bài]/[Tiết] được giữ nguyên.
 
 - **PDF:** gửi text trích xuất và ảnh của từng trang để model đọc cả công thức, hình minh họa, bản scan. PDF có mật khẩu cần được mở khóa trước.
 - **PPTX:** gửi text và ảnh nhúng theo thứ tự slide. PPTX đang có trong dự án gồm 20 slide ảnh và được hỗ trợ theo cách này. Shape, biểu đồ hoặc bố cục PPTX phức tạp không được render hoàn chỉnh; hãy xuất thành PDF để giữ đủ hình thức trình bày.
 - `--text-only` chỉ gửi text để giảm dữ liệu, thích hợp với nguồn không cần hình. Tài liệu hoàn toàn dạng ảnh sẽ báo lỗi ở chế độ này.
 
-Model lấy môn, lớp, bài, tiết và **tên bài từ tài liệu** cùng đường dẫn nguồn. Script kiểm tra lớp/bài/tiết nếu thư mục có dạng `Lop7`, `Bai12`, `Tiet36` (cũng hỗ trợ chữ có dấu và khoảng trắng). Không dùng tên bài trong ví dụ của prompt làm tên mặc định.
+Model lấy môn, lớp, bài, tiết và **tên bài từ nhóm tài liệu trong folder lá** cùng đường dẫn nguồn. Script kiểm tra lớp/bài/tiết nếu thư mục có dạng `Lop7`, `Bai12`, `Tiet36` (cũng hỗ trợ chữ có dấu và khoảng trắng). Không dùng tên bài trong ví dụ của prompt làm tên mặc định.
 
 JSON đúng các khóa của prompt: `title`, `description`, `questions`; đúng 10 câu, mỗi câu 4 lựa chọn và một đáp án đúng. Validator kiểm tra kiểu boolean, text rỗng, khóa thừa/thiếu/trùng, câu hỏi/phương án trùng, mẫu tiêu đề và ký tự LaTeX. Chương trình xáo trộn phương án để đáp án đúng xuất hiện 2–3 lần ở mỗi vị trí, giữ nguyên thứ tự độ khó của câu hỏi.
 
@@ -139,7 +140,7 @@ Validator kiểm tra cấu trúc; độ chính xác kiến thức, mức độ k
 
 ## Retry, state và giới hạn
 
-Lỗi mạng, timeout, HTTP 408/429/5xx và JSON sai được thử lại tối đa 3 lần, tính cả lần đầu. Nếu JSON sai, request tiếp theo giữ nguồn và yêu cầu model sửa. Lỗi key/quyền truy cập/model hoặc endpoint (401/403/404) dừng worker. File khác bị lỗi được ghi nhận và không ngăn tài liệu tiếp theo.
+Lỗi mạng, timeout, HTTP 408/429/5xx và JSON sai được thử lại tối đa 3 lần, tính cả lần đầu. Nếu JSON sai, request tiếp theo giữ nguồn và yêu cầu model sửa. Lỗi key/quyền truy cập/model hoặc endpoint (401/403/404) dừng worker. Folder khác bị lỗi được ghi nhận và không ngăn folder tiếp theo.
 
 State lưu fingerprint của nội dung nguồn, system prompt, model, host, cấu hình sinh và cấu hình đọc. Nguồn/prompt/model đổi, output bị mất hoặc JSON sai thì sinh lại. JSON và state được ghi atomic. Chỉ một worker được dùng cùng thư mục output; khóa tự nhả khi tiến trình kết thúc.
 
@@ -149,7 +150,7 @@ Trong `--watch`, file lỗi được thử lại sau 300 giây; đổi bằng `-
 python generate_quiz.py --force
 ```
 
-Giới hạn mặc định mỗi tài liệu: 80 trang/slide, 200.000 ký tự text, 20 MB tổng ảnh base64, cạnh dài ảnh tối đa 1.600 pixel. Vượt giới hạn sẽ báo lỗi, **không cắt bỏ một phần nguồn**. Có thể điều chỉnh:
+Giới hạn mặc định cho toàn bộ nhóm tài liệu trong một folder lá: 80 trang/slide, 200.000 ký tự text, 20 MB tổng ảnh base64; cạnh dài mỗi ảnh tối đa 1.600 pixel. Vượt giới hạn sẽ báo lỗi, **không cắt bỏ một phần nguồn**. Có thể điều chỉnh:
 
 ```bash
 python generate_quiz.py --max-pages 120 --max-chars 300000 \
@@ -158,7 +159,7 @@ python generate_quiz.py --max-pages 120 --max-chars 300000 \
 
 Các giới hạn của dịch vụ/model vẫn áp dụng khi tăng các giá trị này. Timeout, số lần thử, thời gian backoff, temperature và giới hạn token output có trong `.env.example`.
 
-Mã thoát: `0` lượt hoàn tất, `1` có file lỗi/đang chờ retry, `2` lỗi cấu hình/API nghiêm trọng, `130` dừng bằng Ctrl+C. `--limit` tính số file đã thử xử lý, gồm cả file lỗi; retry cùng file không tính thành file mới.
+Mã thoát: `0` lượt hoàn tất, `1` có folder lỗi/đang chờ retry, `2` lỗi cấu hình/API nghiêm trọng, `130` dừng bằng Ctrl+C. `--limit` tính số folder lá đã thử xử lý, gồm cả folder lỗi; retry cùng folder không tính thành lượt mới.
 
 ## Kiểm tra
 

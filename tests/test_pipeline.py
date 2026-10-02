@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from zipfile import ZipFile
 
 import httpx
 import pymupdf
@@ -20,6 +21,15 @@ def pdf(path, text='Triangle source'):
         doc.save(path)
 
 
+def pptx(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with ZipFile(path, 'w') as archive:
+        archive.writestr('ppt/slides/slide1.xml', f'''<p:sld
+            xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+            <a:t>{text}</a:t></p:sld>''')
+
+
 def generator(quiz, handler=None, prompt='SYS'):
     if handler is None:
         handler = lambda request: httpx.Response(200, json={'done': True, 'message': {'content': json.dumps(quiz)}})
@@ -27,29 +37,40 @@ def generator(quiz, handler=None, prompt='SYS'):
                            client=httpx.Client(transport=httpx.MockTransport(handler)), retry_delay=0, max_attempts=1)
 
 
-def test_mirrors_deep_tree_and_resumes_without_api_calls(tmp_path, quiz):
+def test_leaf_folder_combines_documents_into_one_quiz_and_resumes(tmp_path, quiz):
     source = tmp_path / 'documents'
     output = tmp_path / 'outputs'
-    pdf(source / 'Lop/Lop7/Mon/Toan7/Bai12/Tiet36/a.pdf')
-    pdf(source / 'Lop/Lop7/Mon/Toan7/Bai12/Tiet36/b.PDF')
+    pptx(source / 'Lop/Lop7/Mon/Toan7/Bai12/Tiet36/a.pptx', 'Source A')
+    pptx(source / 'Lop/Lop7/Mon/Toan7/Bai12/Tiet36/b.PPTX', 'Source B')
     requests = []
     def handler(request):
         requests.append(json.loads(request.content)['messages'][1]['content'])
         return httpx.Response(200, json={'done': True, 'message': {'content': json.dumps(quiz)}})
     gen = generator(quiz, handler)
     runner = pipeline().QuizRunner(source, output, gen)
-    assert runner.run_once().generated == 2
-    first = output / 'Lop/Lop7/Mon/Toan7/Bai12/Tiet36/a.pdf.json'
-    second = output / 'Lop/Lop7/Mon/Toan7/Bai12/Tiet36/b.PDF.json'
-    assert first.is_file() and second.is_file()
-    assert 'Tổng các góc' in first.read_text()
-    assert json.loads(second.read_text())['title'] == quiz['title']
+    assert runner.run_once().generated == 1
+    result = output / 'Lop/Lop7/Mon/Toan7/Bai12/Tiet36/Tiet36.json'
+    assert result.is_file()
+    assert json.loads(result.read_text())['title'] == quiz['title']
     state = json.loads((output / '.quiz-state.json').read_text())
-    assert len(state['files']) == 2
+    assert len(state['files']) == 1
     assert 'test' not in (output / '.quiz-state.json').read_text()
-    assert pipeline().QuizRunner(source, output, gen).run_once().skipped == 2
-    assert len(requests) == 2
-    assert 'a.pdf' in requests[0] and 'b.PDF' in requests[1]
+    assert pipeline().QuizRunner(source, output, gen).run_once().skipped == 1
+    assert len(requests) == 1
+    assert all(value in requests[0] for value in ('a.pptx', 'b.PPTX', 'Source A', 'Source B'))
+
+
+def test_leaf_folders_are_generated_by_numeric_period_order(tmp_path, quiz):
+    source = tmp_path / 'documents'
+    for period in (17, 2, 10, 1):
+        pdf(source / f'Bai/T{period}_Tiet {period}/slide.pdf')
+    order = []
+    def handler(request):
+        content = json.loads(request.content)['messages'][1]['content']
+        order.append(next(period for period in (17, 2, 10, 1) if f'T{period}_Tiet' in content))
+        return httpx.Response(200, json={'done': True, 'message': {'content': json.dumps(quiz)}})
+    assert pipeline().QuizRunner(source, tmp_path / 'outputs', generator(quiz, handler)).run_once().generated == 4
+    assert order == [1, 2, 10, 17]
 
 
 def test_source_prompt_and_output_changes_trigger_regeneration(tmp_path, quiz):
@@ -63,33 +84,33 @@ def test_source_prompt_and_output_changes_trigger_regeneration(tmp_path, quiz):
     pdf(path, 'New reference text')
     assert runner.run_once().generated == 1
     assert pipeline().QuizRunner(source, output, generator(quiz, prompt='NEW SYS')).run_once().generated == 1
-    (output / 'a.pdf.json').write_text('{}')
+    (output / 'documents.json').write_text('{}')
     assert pipeline().QuizRunner(source, output, generator(quiz, prompt='NEW SYS')).run_once().generated == 1
-    (output / 'a.pdf.json').unlink()
+    (output / 'documents.json').unlink()
     assert pipeline().QuizRunner(source, output, generator(quiz, prompt='NEW SYS')).run_once().generated == 1
 
 
 def test_failure_does_not_block_next_document_and_has_cooldown(tmp_path, quiz):
     source = tmp_path / 'documents'
     output = tmp_path / 'outputs'
-    pdf(source / 'a.pdf')
-    pdf(source / 'b.pdf')
+    pdf(source / 'A/a.pdf')
+    pdf(source / 'B/b.pdf')
     def handler(request):
         content = json.loads(request.content)['messages'][1]['content']
-        return httpx.Response(200, json={'done': True, 'message': {'content': '{}' if 'a.pdf' in content else json.dumps(quiz)}})
+        return httpx.Response(200, json={'done': True, 'message': {'content': '{}' if 'A/a.pdf' in content else json.dumps(quiz)}})
     runner = pipeline().QuizRunner(source, output, generator(quiz, handler), failure_cooldown=300)
     summary = runner.run_once()
     assert (summary.failed, summary.generated) == (1, 1)
-    assert not (output / 'a.pdf.json').exists()
-    assert (output / 'b.pdf.json').exists()
+    assert not (output / 'A/A.json').exists()
+    assert (output / 'B/B.json').exists()
     assert runner.run_once().deferred == 1
     assert runner.run_once(force=True).failed == 1
 
 
 def test_limit_advances_to_next_file_on_following_pass(tmp_path, quiz):
     source = tmp_path / 'documents'
-    pdf(source / 'a.pdf')
-    pdf(source / 'b.pdf')
+    pdf(source / 'A/a.pdf')
+    pdf(source / 'B/b.pdf')
     runner = pipeline().QuizRunner(source, tmp_path / 'outputs', generator(quiz))
     assert runner.run_once(limit=1).generated == 1
     assert runner.run_once(limit=1).generated == 1
@@ -98,13 +119,13 @@ def test_limit_advances_to_next_file_on_following_pass(tmp_path, quiz):
 
 def test_watch_discovers_file_added_after_first_pass(tmp_path, quiz):
     source = tmp_path / 'documents'
-    pdf(source / 'a.pdf')
+    pdf(source / 'A/a.pdf')
     runner = pipeline().QuizRunner(source, tmp_path / 'outputs', generator(quiz))
     assert runner.run_once().generated == 1
-    pdf(source / 'deeper/b.pdf')
+    pdf(source / 'B/b.pdf')
     result = runner.run_once()
     assert (result.generated, result.skipped) == (1, 1)
-    assert (tmp_path / 'outputs/deeper/b.pdf.json').is_file()
+    assert (tmp_path / 'outputs/B/B.json').is_file()
 
 
 def test_lock_prevents_duplicate_workers_and_releases_on_exit(tmp_path):
@@ -158,23 +179,24 @@ def test_pipeline_uses_normalized_input_and_restores_original_output(tmp_path, q
                                    path_mapping={relative: original},
                                    on_progress=lambda event: events.append(event), stop_event=threading.Event())
     assert runner.run_once().generated == 1
-    assert (output / (original + '.json')).is_file()
-    assert not (output / (relative + '.json')).exists()
+    expected = 'Lớp 7/Toán/Bài 12/Tiết 36/Tiết 36.json'
+    assert (output / expected).is_file()
+    assert not (output / 'Lop 7/Toan/Bai 12/Tiet 36/Tiet 36.json').exists()
     assert relative in requests[0]
     assert [event['status'] for event in events] == ['reading', 'generating', 'done']
-    assert events[-1]['output'] == original + '.json'
+    assert events[-1]['output'] == expected
 
 
 def test_stop_finishes_current_file_but_skips_next(tmp_path, quiz):
     import threading
     source, output = tmp_path / 'input', tmp_path / 'output'
-    pdf(source / 'a.pdf')
-    pdf(source / 'b.pdf')
+    pdf(source / 'A/a.pdf')
+    pdf(source / 'B/b.pdf')
     stop = threading.Event()
     def handler(request):
         stop.set()
         return httpx.Response(200, json={'done': True, 'message': {'content': json.dumps(quiz)}})
     runner = pipeline().QuizRunner(source, output, generator(quiz, handler), stop_event=stop)
     assert runner.run_once().generated == 1
-    assert (output / 'a.pdf.json').is_file()
-    assert not (output / 'b.pdf.json').exists()
+    assert (output / 'A/A.json').is_file()
+    assert not (output / 'B/B.json').exists()

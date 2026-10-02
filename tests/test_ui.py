@@ -75,7 +75,7 @@ def test_browser_folder_restores_tree_and_downloads_zip(ui_server, tmp_path, qui
         page.get_by_role('button', name='Tên gốc').click()
         page.get_by_role('button', name='Bắt đầu tạo quiz').click()
         expect(page.locator('#job-status')).to_have_text('Hoàn tất', timeout=15000)
-        expect(page.locator('#file-table tbody tr')).to_have_count(2)
+        expect(page.locator('#file-table tbody tr')).to_have_count(1)
         assert page.locator('kiểm').count() == 0
         page.get_by_role('button', name='Xem quiz').first.click()
         expect(page.locator('#quiz-dialog')).to_be_visible()
@@ -86,8 +86,7 @@ def test_browser_folder_restores_tree_and_downloads_zip(ui_server, tmp_path, qui
             page.get_by_role('link', name='Tải toàn bộ ZIP').click()
         with ZipFile(BytesIO(open(download.value.path(), 'rb').read())) as archive:
             assert set(archive.namelist()) == {
-                'Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề.pdf.json',
-                'Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề <kiểm tra>.pdf.json',
+                'Lớp 7/Môn/Toán/Bài 12/Tiết 36/Tiết 36.json',
             }
         page.reload()
         expect(page.locator('#job-status')).to_have_text('Hoàn tất')

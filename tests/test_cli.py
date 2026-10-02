@@ -24,8 +24,8 @@ def test_list_does_not_require_api_key(tmp_path):
 
 
 @pytest.mark.parametrize('initial_name,next_name,fail_first,expected_code', [
-    ('a.pdf', 'b.pdf', False, 0),
-    ('b.pdf', 'a.pdf', True, 1),
+    ('A/a.pdf', 'B/b.pdf', False, 0),
+    ('A/b.pdf', 'B/a.pdf', True, 1),
 ])
 def test_watch_cli_processes_new_files_and_exits_at_limit(tmp_path, quiz, initial_name, next_name, fail_first, expected_code):
     requests = []
@@ -48,6 +48,7 @@ def test_watch_cli_processes_new_files_and_exits_at_limit(tmp_path, quiz, initia
     source, output = tmp_path / 'documents', tmp_path / 'outputs'
     source.mkdir()
     def add(name):
+        (source / name).parent.mkdir(parents=True, exist_ok=True)
         with pymupdf.open() as pdf:
             pdf.new_page().insert_text((40, 40), 'Triangle lesson')
             pdf.save(source / name)
@@ -63,11 +64,14 @@ def test_watch_cli_processes_new_files_and_exits_at_limit(tmp_path, quiz, initia
         while not (output / '.quiz-state.json').exists() and time.monotonic() < deadline and process.poll() is None:
             time.sleep(0.05)
         assert (output / '.quiz-state.json').exists()
-        assert (output / (initial_name + '.json')).exists() is not fail_first
+        initial_folder = Path(initial_name).parent
+        initial_output = output / initial_folder / (initial_folder.name + '.json')
+        assert initial_output.exists() is not fail_first
         add(next_name)
         stdout, stderr = process.communicate(timeout=10)
         assert process.returncode == expected_code, stderr
-        assert (output / (next_name + '.json')).exists()
+        next_folder = Path(next_name).parent
+        assert (output / next_folder / (next_folder.name + '.json')).exists()
         assert len(requests) == 2 and next_name in requests[1]
         assert 'test-secret' not in stdout + stderr
     finally:

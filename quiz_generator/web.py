@@ -17,7 +17,7 @@ from starlette.datastructures import UploadFile
 
 from .config import ROOT, create_generator, public_config
 from .documents import SUPPORTED_SUFFIXES
-from .inputs import build_path_mapping, validate_relative_path, validate_output_paths
+from .inputs import build_path_mapping, plan_source_units, validate_relative_path
 from .jobs import JobManager
 from .pipeline import OutputLock, atomic_json
 
@@ -34,10 +34,16 @@ def preview(kind, paths):
     if any(Path(path).suffix.lower() not in SUPPORTED_SUFFIXES for path in paths):
         raise ValueError('Chỉ nhận tài liệu PDF và PPTX.')
     mapping = build_path_mapping(paths)
-    validate_output_paths(paths)
+    plans = plan_source_units(tuple(mapping), mapping, group_leaf_folders=kind == 'folder',
+                              root_name=parts[0][0])
     return {'name': parts[0][0], 'kind': kind,
             'files': [{'id': str(index), 'path': original, 'normalized_path': normalized}
-                      for index, (normalized, original) in enumerate(mapping.items())]}
+                      for index, (normalized, original) in enumerate(mapping.items())],
+            'groups': [{'id': str(index), 'path': plan.path,
+                        'normalized_path': plan.key, 'output': plan.output,
+                        'normalized_output': plan.normalized_output,
+                        'sources': list(plan.original_paths)}
+                       for index, plan in enumerate(plans)]}
 
 
 def _stage(manager, job_id, uploads, mapping):

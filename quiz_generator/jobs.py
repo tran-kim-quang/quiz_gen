@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 
-from .inputs import validate_relative_path
+from .inputs import plan_source_units, validate_relative_path
 from .pipeline import OutputLock, QuizRunner, atomic_json
 
 LOG = logging.getLogger(__name__)
@@ -68,12 +68,21 @@ class JobManager:
     def start(self, job_id: str, kind: str, mapping: dict, sizes: dict) -> dict:
         with self.lock:
             now = time.time()
+            plans = plan_source_units(
+                tuple(mapping), mapping, group_leaf_folders=kind == 'folder',
+                root_name=next(iter(mapping.values())).split('/')[0],
+            )
             job = {
                 'id': job_id, 'kind': kind, 'name': next(iter(mapping.values())).split('/')[0],
                 'status': 'queued', 'created_at': now, 'updated_at': now, 'error': '',
-                'files': [{'id': str(index), 'path': original, 'normalized_path': normalized,
-                           'size': sizes[normalized], 'status': 'pending', 'error': '', 'output': None}
-                          for index, (normalized, original) in enumerate(mapping.items())],
+                'files': [{'id': str(index), 'path': plan.path, 'normalized_path': plan.key,
+                           'sources': list(plan.original_paths),
+                           'normalized_sources': list(plan.relative_paths),
+                           'target_output': plan.output,
+                           'normalized_output': plan.normalized_output,
+                           'size': sum(sizes[path] for path in plan.relative_paths),
+                           'status': 'pending', 'error': '', 'output': None}
+                          for index, plan in enumerate(plans)],
             }
             self.jobs[job_id] = job
             self.stop_events[job_id] = threading.Event()
@@ -129,11 +138,16 @@ class JobManager:
                 job['model'] = generator.model
                 job['status'] = 'stopping' if self.stop_events[job_id].is_set() else 'running'
                 self._save(job)
-                mapping = {file['normalized_path']: file['path'] for file in job['files']}
+                mapping_file = self.work_root / job_id / 'path-mapping.json'
+                if mapping_file.is_file():
+                    mapping = json.loads(mapping_file.read_text(encoding='utf-8'))
+                else:
+                    mapping = {file['normalized_path']: file['path'] for file in job['files']}
             output = self.output_root / job_id
             with OutputLock(output):
                 runner = QuizRunner(self.work_root / job_id / 'input', output, generator,
                                     path_mapping=mapping, stop_event=self.stop_events[job_id],
+                                    group_leaf_folders=job.get('kind') == 'folder',
                                     on_progress=lambda event: self._progress(job_id, event))
                 summary = runner.run_once()
             with self.lock:

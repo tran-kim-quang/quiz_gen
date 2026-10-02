@@ -124,6 +124,9 @@ async function selectFiles(files) {
     const preview = await api('/api/preview', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({kind: state.kind, paths})});
     if (sequence !== state.previewSequence) return;
     state.preview = preview;
+    const groupText = state.kind === 'folder' ? `${preview.groups.length} folder lá sẽ tạo ${preview.groups.length} quiz.` : '';
+    const ignoredText = state.skippedFiles.length ? `Đã bỏ qua ${state.skippedFiles.length} file không phải PDF/PPTX.` : '';
+    $('selection-note').textContent = [ignoredText, groupText].filter(Boolean).join(' ');
     renderTree(); updateControls();
   } catch (error) {
     if (sequence === state.previewSequence) { state.preview = null; notice(error.message); updateControls(); }
@@ -135,7 +138,7 @@ function renderTree() {
   $('tree-caption').textContent = state.view === 'original' ? 'ĐẦU RA' : 'INPUT KHÔNG DẤU';
   const container = $('path-tree');
   container.replaceChildren();
-  const files = state.preview?.files || state.job?.files;
+  const files = state.preview?.groups || state.job?.files;
   if (!files?.length) {
     const empty = node('div', 'tree-empty'); const mark = node('span'); mark.append(icon('folder-tree'));
     empty.append(mark, node('strong', '', 'Cây thư mục của bạn'), node('p', '', 'Chọn nguồn để xem trước vị trí của từng file quiz.'));
@@ -143,7 +146,9 @@ function renderTree() {
   }
   const root = new Map();
   files.slice(0, 200).forEach(file => {
-    const path = state.view === 'normalized' ? file.normalized_path : file.path + '.json';
+    const path = state.view === 'normalized'
+      ? (file.normalized_output || file.normalized_path + '.json')
+      : (file.output || file.target_output || file.path + '.json');
     const parts = path.split('/'); let children = root;
     parts.forEach((part, index) => {
       if (!children.has(part)) children.set(part, {name: part, file: index === parts.length - 1, children: new Map()});
@@ -209,19 +214,22 @@ function renderJob() {
   const current = job.files.find(file => ['reading', 'generating'].includes(file.status));
   $('progress-label').textContent = current ? `${labels[current.status]}: ${current.path.split('/').pop()}`
     : job.status === 'queued' ? `Đang chờ đến lượt${job.queue_position ? ` · vị trí ${job.queue_position}` : ''}`
-    : `${processed}/${job.counts.total} tài liệu đã xử lý${job.status === 'stopping' ? ' · Chờ file hiện tại hoàn thành' : ''}`;
+    : `${processed}/${job.counts.total} lượt đã xử lý${job.status === 'stopping' ? ' · Chờ folder hiện tại hoàn thành' : ''}`;
   $('job-error').hidden = !job.error; $('job-error').textContent = job.error || '';
   $('stop-button').hidden = !activeStatuses.has(job.status); $('stop-button').disabled = job.status === 'stopping';
-  $('stop-button').replaceChildren(icon('square'), document.createTextNode(job.status === 'queued' ? 'Huỷ lượt chờ' : 'Dừng sau file này'));
+  $('stop-button').replaceChildren(icon('square'), document.createTextNode(job.status === 'queued' ? 'Huỷ lượt chờ' : 'Dừng sau folder này'));
   const zip = $('zip-download');
   zip.setAttribute('aria-disabled', String(!job.counts.done)); zip.tabIndex = job.counts.done ? 0 : -1;
   if (job.counts.done) zip.href = `/api/jobs/${job.id}/download`; else zip.removeAttribute('href');
   const tbody = $('file-table').querySelector('tbody'); tbody.replaceChildren();
   job.files.forEach(file => {
     const tr = node('tr'); const source = node('td'); const cell = node('div', 'file-cell');
-    const symbol = node('span', 'file-symbol'); symbol.append(icon('file'));
+    const symbol = node('span', 'file-symbol'); symbol.append(icon(job.kind === 'folder' ? 'folder' : 'file'));
     const details = node('div'); const parts = file.path.split('/');
-    details.append(node('strong', 'file-name', parts.pop()), node('span', 'file-parent', parts.join('/') || 'File đơn'));
+    const sourceCount = file.sources?.length || 1;
+    const parent = parts.join('/') || 'File đơn';
+    details.append(node('strong', 'file-name', parts.pop()),
+      node('span', 'file-parent', `${parent}${sourceCount > 1 ? ` · ${sourceCount} tài liệu` : ''}`));
     if (file.error) details.append(node('p', 'file-error', file.error));
     cell.append(symbol, details); source.append(cell);
     const status = node('td'); status.append(statusBadge(file.status));

@@ -58,13 +58,14 @@ def test_folder_upload_normalizes_before_llm_and_downloads_original_tree(tmp_pat
         assert response.status_code == 202, response.text
         job = wait_job(client, response.json()['id'])
         assert job['status'] == 'completed'
-        assert job['counts']['done'] == 2
-        assert len(seen) == 2
-        assert all('Lop 7/Mon/Toan/Bai 12/Tiet 36/' in content for content in seen)
-        assert all('Lớp 7/' not in content for content in seen)
+        assert job['counts']['done'] == 1
+        assert len(seen) == 1
+        assert all(name in seen[0] for name in ('De.pdf', 'De khac.pdf'))
+        assert 'Lop 7/Mon/Toan/Bai 12/Tiet 36/' in seen[0]
+        assert 'Lớp 7/' not in seen[0]
         archive = client.get(f"/api/jobs/{job['id']}/download")
         with ZipFile(BytesIO(archive.content)) as zipfile:
-            assert set(zipfile.namelist()) == {p + '.json' for p in paths}
+            assert set(zipfile.namelist()) == {'Lớp 7/Môn/Toán/Bài 12/Tiết 36/Tiết 36.json'}
             for name in zipfile.namelist():
                 assert json.loads(zipfile.read(name))['title'] == quiz['title']
         file_id = job['files'][0]['id']
@@ -84,8 +85,8 @@ def test_single_file_and_accent_collisions(tmp_path, quiz):
             assert archive.namelist() == ['Đề.pdf.json']
         response = submit(client, ['Root/Má/Đề.pdf', 'Root/Ma/Đề.pdf', 'Root/Má/De.pdf'])
         job = wait_job(client, response.json()['id'])
-        assert len({file['normalized_path'] for file in job['files']}) == 3
-        assert job['counts']['done'] == 3
+        assert len({file['normalized_path'] for file in job['files']}) == 2
+        assert job['counts']['done'] == 2
 
 
 @pytest.mark.parametrize('kind,paths', [
@@ -177,7 +178,7 @@ def test_upload_accepts_more_than_previous_500_file_limit(tmp_path, quiz):
         started.set()
         assert release.wait(timeout=5)
         return httpx.Response(200, json={'done': True, 'message': {'content': json.dumps(quiz)}})
-    paths = [f'Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề {index}.pdf' for index in range(501)]
+    paths = [f'Lớp 7/Môn/Toán/Bài 12/Tiết 36/Nhóm {index}/Đề.pdf' for index in range(501)]
     with TestClient(create_app(work_root=tmp_path / 'work', output_root=tmp_path / 'out',
                               generator_factory=factory(quiz, handler))) as client:
         response = submit(client, paths)
