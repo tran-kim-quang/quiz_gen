@@ -113,3 +113,26 @@ def test_transparent_pptx_image_preserves_black_content_on_white_background(tmp_
     with Image.open(BytesIO(base64.b64decode(document.images[0]))) as decoded:
         assert min(decoded.getpixel((5, 5))) > 230
         assert max(decoded.getpixel((50, 50))) < 20
+
+def test_discovery_excludes_nested_result_roots_and_symlink_alias(tmp_path):
+    root = tmp_path / 'documents'
+    merged = root / 'merged-documents'
+    output = root / 'output'
+    for path in (
+        root / 'source/lesson.pdf',
+        merged / 'Toan7/merged.pptx',
+        output / 'Toan7/result.pdf',
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    alias = root / 'merged-alias'
+    alias.symlink_to(merged, target_is_directory=True)
+
+    found = api().discover_documents(
+        root,
+        exclude_roots=(output, merged),
+    )
+
+    assert [path.relative_to(root).as_posix() for path in found] == [
+        'source/lesson.pdf',
+    ]

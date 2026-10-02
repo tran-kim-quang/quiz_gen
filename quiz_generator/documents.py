@@ -3,9 +3,11 @@
 import base64
 from dataclasses import dataclass
 from io import BytesIO
+import os
 from pathlib import Path
 import posixpath
 import re
+from typing import Iterable
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
@@ -25,13 +27,37 @@ class Document:
     page_count: int
 
 
-def discover_documents(root: Path) -> list[Path]:
+def discover_documents(
+    root: Path, *, exclude_roots: Iterable[Path] = (),
+) -> list[Path]:
+    root = root.resolve()
     if not root.is_dir():
         raise ValueError(f'Không tìm thấy thư mục tài liệu: {root}')
-    return sorted(
-        (p for p in root.rglob('*') if p.is_file() and p.suffix.lower() in SUPPORTED_SUFFIXES),
-        key=lambda p: p.relative_to(root).as_posix(),
-    )
+    excluded = tuple(Path(path).resolve() for path in exclude_roots)
+
+    def is_excluded(path: Path) -> bool:
+        resolved = path.resolve()
+        return any(
+            resolved == excluded_root or resolved.is_relative_to(excluded_root)
+            for excluded_root in excluded
+        )
+
+    found = []
+    for current, directories, files in os.walk(root, topdown=True, followlinks=False):
+        current_path = Path(current)
+        directories[:] = [
+            name for name in directories
+            if not is_excluded(current_path / name)
+        ]
+        found.extend(
+            path for name in files
+            if (path := current_path / name).suffix.lower() in SUPPORTED_SUFFIXES
+            and path.is_file() and not is_excluded(path)
+        )
+    return sorted(found, key=lambda path: (
+        path.relative_to(root).as_posix().casefold(),
+        path.relative_to(root).as_posix(),
+    ))
 
 
 def _jpeg(raw: bytes, image_edge: int) -> bytes:

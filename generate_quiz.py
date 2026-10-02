@@ -6,9 +6,11 @@ import logging
 from pathlib import Path
 import time
 
-from quiz_generator.config import create_generator
+from quiz_generator.config import create_generator, resolve_quiz_paths
 from quiz_generator.documents import discover_documents
 from quiz_generator.pipeline import OutputLock, QuizRunner
+from quiz_generator.planning import SourceFile, plan_documents
+from quiz_generator.pptx_merge import NodePptxMerger, PptxMaterializer
 
 ROOT = Path(__file__).resolve().parent
 LOG = logging.getLogger('quiz_generator')
@@ -16,8 +18,9 @@ LOG = logging.getLogger('quiz_generator')
 
 def parser():
     result = argparse.ArgumentParser(description='Sinh JSON quiz từ từng PDF/PPTX, giữ nguyên cây thư mục.')
-    result.add_argument('--documents', type=Path, default=ROOT / 'documents', help='Thư mục nguồn (quét đệ quy).')
-    result.add_argument('--output', type=Path, default=ROOT / 'outputs', help='Thư mục lưu JSON.')
+    result.add_argument('--documents', type=Path, help='Thư mục nguồn (quét đệ quy).')
+    result.add_argument('--merged-documents', type=Path, help='Thư mục PPTX ghép dùng chung.')
+    result.add_argument('--output', type=Path, help='Thư mục lưu JSON.')
     result.add_argument('--env-file', type=Path, default=ROOT / '.env', help='File chứa API key và model.')
     result.add_argument('--watch', action='store_true', help='Chạy liên tục, theo dõi file mới/thay đổi.')
     result.add_argument('--interval', type=float, default=10, help='Khoảng quét trong watch, giây (0 < n ≤ 60).')
@@ -33,6 +36,44 @@ def parser():
     return result
 
 
+def build_plan(paths):
+    sources = discover_documents(
+        paths.documents,
+        exclude_roots=(paths.output, paths.merged_documents),
+    )
+    return plan_documents([
+        SourceFile(
+            path=path,
+            normalized_path=path.relative_to(paths.documents).as_posix(),
+            original_path=path.relative_to(paths.documents).as_posix(),
+        )
+        for path in sources
+    ], paths.merged_documents)
+
+
+def print_plan(plan):
+    labels = {
+        'merge': 'merge',
+        'reuse': 'reuse merged',
+        'standalone': 'standalone',
+    }
+    counts = {key: 0 for key in labels}
+    for document in plan.documents:
+        counts[document.action] += 1
+        members = ', '.join(member.original_path for member in document.members)
+        print(f'[{labels[document.action]}] {document.output_path} <- {members}')
+        if document.warning:
+            print(f'  Cảnh báo: {document.warning}')
+    for issue in plan.issues:
+        level = 'Lỗi' if issue.fatal else 'Cảnh báo'
+        print(f'{level}: {issue.message}')
+    print(
+        f"Tổng: {len(plan.documents)} tài liệu logic; "
+        f"merge: {counts['merge']}; reuse merged: {counts['reuse']}; "
+        f"standalone: {counts['standalone']}."
+    )
+
+
 def main(argv=None) -> int:
     argument_parser = parser()
     args = argument_parser.parse_args(argv)
@@ -45,17 +86,40 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     generator = None
     try:
-        sources = discover_documents(args.documents)
+        paths = resolve_quiz_paths(
+            args.env_file,
+            documents=args.documents,
+            merged_documents=args.merged_documents,
+            output=args.output,
+        )
+        initial_plan = build_plan(paths)
         if args.list:
-            for source in sources:
-                print(source.relative_to(args.documents).as_posix())
-            print(f'Tổng: {len(sources)} tài liệu.')
-            return 0
+            print_plan(initial_plan)
+            return 1 if any(issue.fatal for issue in initial_plan.issues) else 0
         generator = create_generator(args.env_file)
-        LOG.info('Model: %s; tìm thấy %d tài liệu.', generator.model, len(sources))
-        with OutputLock(args.output):
-            runner = QuizRunner(args.documents, args.output, generator,
+        materializer = PptxMaterializer(NodePptxMerger())
+
+        def provide_documents():
+            current = build_plan(paths)
+            fatal = [issue for issue in current.issues if issue.fatal]
+            if fatal:
+                raise ValueError('; '.join(issue.message for issue in fatal))
+            for issue in current.issues:
+                LOG.warning('%s', issue.message)
+            result = materializer.materialize(
+                current,
+                lambda event: LOG.info(
+                    'Ghép PPTX [%s]: %s', event['event'], event['state_key']
+                ),
+            )
+            return result.documents
+
+        LOG.info('Model: %s; kế hoạch có %d tài liệu logic.',
+                 generator.model, len(initial_plan.documents))
+        with OutputLock(paths.output):
+            runner = QuizRunner(paths.documents, paths.output, generator,
                                 failure_cooldown=args.failure_cooldown,
+                                document_provider=provide_documents,
                                 reader_options={
                                     'text_only': args.text_only, 'max_pages': args.max_pages,
                                     'max_chars': args.max_chars, 'image_edge': args.image_edge,
