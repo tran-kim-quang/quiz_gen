@@ -6,4 +6,5 @@ __pycache__/
 outputs/
 .quiz-ui/
 .worktrees/
+node_modules/
 *.pyc

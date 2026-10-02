@@ -1,0 +1,14 @@
+{
+  "name": "quiz-generator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "npm run test:node",
+    "test:node": "node --test tests/pptx-merge-worker.test.mjs"
+  },
+  "dependencies": {
+    "jszip": "3.10.2",
+    "pptxgenjs": "4.0.1"
+  }
+}
