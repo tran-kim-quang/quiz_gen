@@ -18,6 +18,28 @@ def test_parses_short_and_prefixed_part_names():
     assert prefixed == api().PartIdentity(course='Toan7', lesson='Bài 12', section=36, part=1)
 
 
+def test_parses_van_section_folder_and_ignores_slide_suffix():
+    first = api().parse_part_identity(
+        'Van8/T1_Câu chuyện lịch sử và đặc trưng truyện lịch sử/T1_1_Slide.pptx'
+    )
+    second = api().parse_part_identity(
+        'Van8/T1_Câu chuyện lịch sử và đặc trưng truyện lịch sử/T1_2_Slides.pptx'
+    )
+
+    assert first == api().PartIdentity(
+        course='Van8',
+        lesson='T1_Câu chuyện lịch sử và đặc trưng truyện lịch sử',
+        section=1,
+        part=1,
+    )
+    assert second == api().PartIdentity(
+        course='Van8',
+        lesson='T1_Câu chuyện lịch sử và đặc trưng truyện lịch sử',
+        section=1,
+        part=2,
+    )
+
+
 def test_rejects_ambiguous_and_folder_mismatched_sections():
     assert api().parse_part_identity(
         'Toan11/Bài 4/Tiết 37/T36_1.pptx'
@@ -70,8 +92,8 @@ def test_pairs_exactly_one_part_in_part_order(tmp_path):
     assert [member.original_path for member in document.members] == [
         part1.original_path, part2.original_path,
     ]
-    assert document.source_path == merged_root / 'Toan7/Bài 12/T36/T36_Slide.pptx'
-    assert document.output_path == 'Toan7/Bài 12/T36/T36_Slide.json'
+    assert document.source_path == merged_root / 'Toan7/Bài 12/T36/T36.pptx'
+    assert document.output_path == 'Toan7/Bài 12/T36/T36.json'
 
 
 def test_missing_duplicate_and_unrecognized_parts_are_standalone(tmp_path):
@@ -136,6 +158,18 @@ def test_maps_merged_and_standalone_outputs(tmp_path):
 
     assert standalone.output_path == 'Toan7/Bài 12/worksheet.json'
     assert next(document for document in second.documents if document.kind == 'merged').action == 'reuse'
+
+
+def test_maps_van_section_folder_without_slide_suffix(tmp_path):
+    folder = 'Van8/T1_Câu chuyện lịch sử và đặc trưng truyện lịch sử'
+    part1 = source(tmp_path, f'{folder}/T1_1_Slide.pptx')
+    part2 = source(tmp_path, f'{folder}/T1_2_Slide.pptx')
+    merged_root = tmp_path / 'merged'
+
+    document = api().plan_documents([part1, part2], merged_root).documents[0]
+
+    assert document.source_path == merged_root / folder / 'T1.pptx'
+    assert document.output_path == f'{folder}/T1.json'
 
 
 def test_detects_logical_output_collisions(tmp_path):

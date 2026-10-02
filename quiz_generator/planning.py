@@ -61,13 +61,24 @@ def _fold(value: str) -> str:
 
 def _course_and_lesson(parts: tuple[str, ...]) -> tuple[str, str] | None:
     course = next(
-        (part for part in parts[:-1] if re.fullmatch(r'toan\s*\d+', _fold(part), re.I)),
+        (
+            part for part in parts[:-1]
+            if re.fullmatch(r'[a-z][a-z\s_-]*\d+', _fold(part), re.I)
+        ),
         None,
     )
     lesson = next(
         (part for part in parts[:-1] if re.match(r'^bai\s*0*\d+(?:\D|$)', _fold(part), re.I)),
         None,
     )
+    if lesson is None:
+        lesson = next(
+            (
+                part for part in parts[:-1]
+                if re.match(r'^(?:tiet|t)\s*0*\d+(?:\D|$)', _fold(part), re.I)
+            ),
+            None,
+        )
     return (course, lesson) if course and lesson else None
 
 
@@ -129,6 +140,17 @@ def _safe_target(root: Path, relative: str) -> Path:
     return target
 
 
+def _logical_directory(identity: PartIdentity) -> str:
+    lesson_section = re.match(
+        r'^(?:tiet|t)\s*0*(?P<section>\d+)(?:\D|$)',
+        _fold(identity.lesson),
+        re.I,
+    )
+    if lesson_section and int(lesson_section.group('section')) == identity.section:
+        return f'{identity.course}/{identity.lesson}'
+    return f'{identity.course}/{identity.lesson}/T{identity.section}'
+
+
 def standalone_document(source: SourceFile, *, warning: str = '') -> PlannedDocument:
     validate_relative_path(source.normalized_path)
     validate_relative_path(source.original_path)
@@ -137,7 +159,7 @@ def standalone_document(source: SourceFile, *, warning: str = '') -> PlannedDocu
         output = str(PurePosixPath(source.original_path).with_suffix('.json'))
     else:
         stem = PurePosixPath(source.original_path).stem
-        output = f'{identity.course}/{identity.lesson}/T{identity.section}/{stem}.json'
+        output = f'{_logical_directory(identity)}/{stem}.json'
     validate_relative_path(output)
     return PlannedDocument(
         source_path=source.path,
@@ -163,8 +185,7 @@ def _merged_document(
                              identity.lesson,
                          ))
     relative_pptx = (
-        f'{representative.course}/{representative.lesson}/T{representative.section}/'
-        f'T{representative.section}_Slide.pptx'
+        f'{_logical_directory(representative)}/T{representative.section}.pptx'
     )
     source_path = _safe_target(merged_root, relative_pptx)
     output_path = str(PurePosixPath(relative_pptx).with_suffix('.json'))

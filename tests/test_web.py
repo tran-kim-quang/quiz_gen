@@ -226,7 +226,7 @@ def test_preview_merge_pair_is_one_logical_document_without_writes(tmp_path, qui
     assert [file['path'] for file in body['files']] == paths
     assert len(body['documents']) == 1
     assert body['documents'][0]['action'] == 'merge'
-    assert body['documents'][0]['output_path'] == 'Toan7/Bài 12/T36/T36_Slide.json'
+    assert body['documents'][0]['output_path'] == 'Toan7/Bài 12/T36/T36.json'
     assert body['documents'][0]['members'] == paths
     assert not merged.exists()
 
@@ -235,7 +235,7 @@ def test_preview_reuse_reports_existing_shared_target(tmp_path, quiz):
     from fastapi.testclient import TestClient
 
     merged = tmp_path / 'merged'
-    target = merged / 'Toan7/Bài 12/T36/T36_Slide.pptx'
+    target = merged / 'Toan7/Bài 12/T36/T36.pptx'
     target.parent.mkdir(parents=True)
     target.touch()
     paths = [
@@ -376,14 +376,14 @@ def test_pair_job_materializes_once_and_outputs_one_logical_json(tmp_path, quiz)
     assert len(job['files']) == 1
     assert job['files'][0]['action'] == 'merge'
     assert job['files'][0]['members'] == pair_paths()
-    assert job['files'][0]['output'].endswith('T36_Slide.json')
+    assert job['files'][0]['output'].endswith('T36.json')
 
 
 def test_existing_merge_skips_worker(tmp_path, quiz):
     from fastapi.testclient import TestClient
 
     merged = tmp_path / 'merged'
-    target = merged / 'Toan7/Bài 12/T36/T36_Slide.pptx'
+    target = merged / 'Toan7/Bài 12/T36/T36.pptx'
     target.parent.mkdir(parents=True)
     target.write_bytes(pptx_bytes('Existing merged'))
     merger = FakeMerger()
@@ -466,7 +466,7 @@ def test_zip_contains_only_final_logical_json_tree(tmp_path, quiz):
         archive = client.get(f"/api/jobs/{job['id']}/download")
 
     with ZipFile(BytesIO(archive.content)) as zipfile:
-        assert zipfile.namelist() == ['Toan7/Bài 12/T36/T36_Slide.json']
+        assert zipfile.namelist() == ['Toan7/Bài 12/T36/T36.json']
 
 
 def test_restart_resets_merging_row_to_pending_and_marks_interrupted(tmp_path, quiz):
@@ -492,8 +492,8 @@ def test_restart_resets_merging_row_to_pending_and_marks_interrupted(tmp_path, q
         }],
         'files': [{
             'id': 'logical-0',
-            'path': 'Toan7/Bai 12/T36/T36_Slide.pptx',
-            'normalized_path': 'Toan7/Bai 12/T36/T36_Slide.pptx',
+            'path': 'Toan7/Bai 12/T36/T36.pptx',
+            'normalized_path': 'Toan7/Bai 12/T36/T36.pptx',
             'members': pair_paths(),
             'action': 'merge',
             'warning': '',

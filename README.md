@@ -141,13 +141,26 @@ Ví dụ một cặp hợp lệ:
 documents/Toan7/Toan7 pptx/Bai 12/T36_1.pptx
 documents/Toan7/Toan7 pptx/Bai 12/T36_2.pptx
 
-merged-documents/Toan7/Bai 12/T36/T36_Slide.pptx
-documents/output/Toan7/Bai 12/T36/T36_Slide.json
+merged-documents/Toan7/Bai 12/T36/T36.pptx
+documents/output/Toan7/Bai 12/T36/T36.json
 ```
 
 Nếu chỉ có một part, trùng part, tên không nhận diện được hoặc tiết trong folder mâu thuẫn với tên file, mỗi file được xử lý độc lập và có cảnh báo. Ví dụ `T36_1.pptx` đứng một mình tạo `Toan7/Bai 12/T36/T36_1.json`.
 
-File ghép dùng chung là **bất biến** đối với workflow: nếu `T36_Slide.pptx` đã tồn tại, hệ thống dùng lại ngay, không so sánh timestamp/hash và không ghi đè dù part nguồn thay đổi. Muốn cố ý ghép lại, hãy dừng worker rồi tự chuyển hoặc xóa file ghép hiện có; lượt tiếp theo sẽ tạo lại từ part 1 và part 2.
+Thư mục môn khác cũng được nhận diện theo cùng quy tắc. Ví dụ:
+
+```text
+Van8/T1_Câu chuyện lịch sử và đặc trưng truyện lịch sử/
+├── T1_1_Slide.pptx
+└── T1_2_Slide.pptx
+
+merged-documents/Van8/T1_Câu chuyện lịch sử và đặc trưng truyện lịch sử/T1.pptx
+documents/output/Van8/T1_Câu chuyện lịch sử và đặc trưng truyện lịch sử/T1.json
+```
+
+`_Slide` hoặc `_Slides` ở cuối tên part chỉ là mô tả nguồn, không được thêm vào tên bản ghép.
+
+File ghép dùng chung là **bất biến** đối với workflow: nếu `T36.pptx` đã tồn tại, hệ thống dùng lại ngay, không so sánh timestamp/hash và không ghi đè dù part nguồn thay đổi. Muốn cố ý ghép lại, hãy dừng worker rồi tự chuyển hoặc xóa file ghép hiện có; lượt tiếp theo sẽ tạo lại từ part 1 và part 2.
 
 `--list` chỉ in kế hoạch `merge`, `reuse merged`, `standalone` và cảnh báo; không tạo PPTX, JSON hay gọi API:
 

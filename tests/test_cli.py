@@ -213,7 +213,7 @@ def test_list_reports_merge_reuse_and_standalone_without_running_worker(tmp_path
         path = lesson / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
-    reused = merged / 'Toan7/Bài 12/T37/T37_Slide.pptx'
+    reused = merged / 'Toan7/Bài 12/T37/T37.pptx'
     reused.parent.mkdir(parents=True)
     reused.touch()
 
@@ -243,7 +243,7 @@ def test_cli_generates_one_json_for_existing_merged_pair(tmp_path, quiz):
         path = lesson / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
-    target = merged / 'Toan7/Bài 12/T36/T36_Slide.pptx'
+    target = merged / 'Toan7/Bài 12/T36/T36.pptx'
     pptx(target)
     requests = []
     server = quiz_server(quiz, requests)
@@ -260,7 +260,7 @@ def test_cli_generates_one_json_for_existing_merged_pair(tmp_path, quiz):
         server.server_close()
 
     assert result.returncode == 0, result.stderr
-    assert (output / 'Toan7/Bài 12/T36/T36_Slide.json').is_file()
+    assert (output / 'Toan7/Bài 12/T36/T36.json').is_file()
     assert len(requests) == 1
     assert not (output / 'Toan7/Bài 12/T36/T36_1.json').exists()
     assert not (output / 'Toan7/Bài 12/T36/T36_2.json').exists()
@@ -317,11 +317,11 @@ def test_watch_replans_when_second_part_arrives(tmp_path, quiz):
         while not standalone.exists() and time.monotonic() < deadline and process.poll() is None:
             time.sleep(0.05)
         assert standalone.is_file()
-        pptx(merged / 'Toan7/Bài 12/T36/T36_Slide.pptx', 'Merged pair')
+        pptx(merged / 'Toan7/Bài 12/T36/T36.pptx', 'Merged pair')
         pptx(lesson / 'T36_2.pptx', 'Part two')
         stdout, stderr = process.communicate(timeout=10)
         assert process.returncode == 0, stderr
-        assert (output / 'Toan7/Bài 12/T36/T36_Slide.json').is_file()
+        assert (output / 'Toan7/Bài 12/T36/T36.json').is_file()
         assert len(requests) == 2
         assert 'test-secret' not in stdout + stderr
     finally:
