@@ -15,13 +15,15 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
-from .config import ROOT, create_generator, public_config
+from .config import ROOT, create_generator, public_config, resolve_quiz_paths
+from .planning import SourceFile, plan_documents
+from .pptx_merge import NodePptxMerger
 from .documents import SUPPORTED_SUFFIXES
 from .inputs import build_path_mapping, validate_relative_path, validate_output_paths
 from .jobs import JobManager
 from .pipeline import OutputLock, atomic_json
 
-def preview(kind, paths):
+def preview(kind, paths, merged_root):
     if kind not in ('file', 'folder') or not isinstance(paths, list) or not paths:
         raise ValueError('Chọn một file hoặc folder có tài liệu PDF/PPTX.')
     if any(not isinstance(path, str) for path in paths):
@@ -35,9 +37,41 @@ def preview(kind, paths):
         raise ValueError('Chỉ nhận tài liệu PDF và PPTX.')
     mapping = build_path_mapping(paths)
     validate_output_paths(paths)
-    return {'name': parts[0][0], 'kind': kind,
-            'files': [{'id': str(index), 'path': original, 'normalized_path': normalized}
-                      for index, (normalized, original) in enumerate(mapping.items())]}
+    files = [
+        {'id': str(index), 'path': original, 'normalized_path': normalized}
+        for index, (normalized, original) in enumerate(mapping.items())
+    ]
+    plan = plan_documents([
+        SourceFile(
+            path=None,
+            normalized_path=file['normalized_path'],
+            original_path=file['path'],
+        )
+        for file in files
+    ], merged_root)
+    fatal = [issue for issue in plan.issues if issue.fatal]
+    if fatal:
+        raise ValueError('; '.join(issue.message for issue in fatal))
+    return {
+        'name': parts[0][0],
+        'kind': kind,
+        'files': files,
+        'documents': [{
+            'state_key': document.state_key,
+            'prompt_path': document.prompt_path,
+            'output_path': document.output_path,
+            'kind': document.kind,
+            'action': document.action,
+            'members': [member.original_path for member in document.members],
+            'warning': document.warning,
+        } for document in plan.documents],
+        'issues': [{
+            'code': issue.code,
+            'message': issue.message,
+            'members': list(issue.members),
+            'fatal': issue.fatal,
+        } for issue in plan.issues],
+    }
 
 
 def _stage(manager, job_id, uploads, mapping):
@@ -58,11 +92,20 @@ def _stage(manager, job_id, uploads, mapping):
 
 def create_app(*, work_root: Path = ROOT / '.quiz-ui' / 'jobs',
                output_root: Path = ROOT / 'outputs' / 'ui', generator_factory=None,
-               env_file: Path = ROOT / '.env'):
+               env_file: Path = ROOT / '.env', merged_root: Path | None = None,
+               merger: NodePptxMerger | None = None):
+    merged_root = (merged_root or resolve_quiz_paths(env_file).merged_documents).resolve()
+
     @asynccontextmanager
     async def lifespan(app):
         with OutputLock(work_root):
-            manager = JobManager(work_root, output_root, generator_factory or (lambda: create_generator(env_file)))
+            manager = JobManager(
+                work_root,
+                output_root,
+                generator_factory or (lambda: create_generator(env_file)),
+                merged_root,
+                merger,
+            )
             app.state.manager = manager
             try:
                 yield
@@ -87,7 +130,7 @@ def create_app(*, work_root: Path = ROOT / '.quiz-ui' / 'jobs',
     async def get_preview(request: Request):
         try:
             body = await request.json()
-            return preview(body.get('kind'), body.get('paths'))
+            return preview(body.get('kind'), body.get('paths'), merged_root)
         except (ValueError, AttributeError) as error:
             raise HTTPException(400, str(error)) from None
 
@@ -97,7 +140,7 @@ def create_app(*, work_root: Path = ROOT / '.quiz-ui' / 'jobs',
         async with request.form(max_files=sys.maxsize, max_fields=10, max_part_size=sys.maxsize) as form:
             try:
                 paths = json.loads(form.get('paths', '[]'))
-                info = preview(form.get('kind'), paths)
+                info = preview(form.get('kind'), paths, merged_root)
             except (ValueError, TypeError) as error:
                 raise HTTPException(400, str(error)) from None
             uploads = form.getlist('files')

@@ -1,5 +1,6 @@
 from io import BytesIO
 import json
+from pathlib import PurePosixPath
 import threading
 import time
 from zipfile import ZipFile
@@ -64,7 +65,9 @@ def test_folder_upload_normalizes_before_llm_and_downloads_original_tree(tmp_pat
         assert all('Lớp 7/' not in content for content in seen)
         archive = client.get(f"/api/jobs/{job['id']}/download")
         with ZipFile(BytesIO(archive.content)) as zipfile:
-            assert set(zipfile.namelist()) == {p + '.json' for p in paths}
+            assert set(zipfile.namelist()) == {
+                str(PurePosixPath(path).with_suffix('.json')) for path in paths
+            }
             for name in zipfile.namelist():
                 assert json.loads(zipfile.read(name))['title'] == quiz['title']
         file_id = job['files'][0]['id']
@@ -81,11 +84,9 @@ def test_single_file_and_accent_collisions(tmp_path, quiz):
         response = submit(client, ['Đề.pdf'], 'file')
         job = wait_job(client, response.json()['id'])
         with ZipFile(BytesIO(client.get(f"/api/jobs/{job['id']}/download").content)) as archive:
-            assert archive.namelist() == ['Đề.pdf.json']
+            assert archive.namelist() == ['Đề.json']
         response = submit(client, ['Root/Má/Đề.pdf', 'Root/Ma/Đề.pdf', 'Root/Má/De.pdf'])
-        job = wait_job(client, response.json()['id'])
-        assert len({file['normalized_path'] for file in job['files']}) == 3
-        assert job['counts']['done'] == 3
+        assert response.status_code == 400
 
 
 @pytest.mark.parametrize('kind,paths', [
@@ -202,3 +203,343 @@ def test_restart_retains_completed_downloads(tmp_path, quiz):
     with TestClient(create_app(**options)) as client:
         assert client.get('/api/jobs/' + job_id).json()['counts']['done'] == 1
         assert client.get(f'/api/jobs/{job_id}/download').status_code == 200
+
+def test_preview_merge_pair_is_one_logical_document_without_writes(tmp_path, quiz):
+    from fastapi.testclient import TestClient
+
+    merged = tmp_path / 'merged'
+    paths = [
+        'Root/Toan7/Bài 12/T36_1.pptx',
+        'Root/Toan7/Bài 12/T36_2.pptx',
+    ]
+    app = create_app(
+        work_root=tmp_path / 'work',
+        output_root=tmp_path / 'out',
+        merged_root=merged,
+        generator_factory=factory(quiz),
+    )
+    with TestClient(app) as client:
+        response = client.post('/api/preview', json={'kind': 'folder', 'paths': paths})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [file['path'] for file in body['files']] == paths
+    assert len(body['documents']) == 1
+    assert body['documents'][0]['action'] == 'merge'
+    assert body['documents'][0]['output_path'] == 'Toan7/Bài 12/T36/T36_Slide.json'
+    assert body['documents'][0]['members'] == paths
+    assert not merged.exists()
+
+
+def test_preview_reuse_reports_existing_shared_target(tmp_path, quiz):
+    from fastapi.testclient import TestClient
+
+    merged = tmp_path / 'merged'
+    target = merged / 'Toan7/Bài 12/T36/T36_Slide.pptx'
+    target.parent.mkdir(parents=True)
+    target.touch()
+    paths = [
+        'Root/Toan7/Bài 12/T36_1.pptx',
+        'Root/Toan7/Bài 12/T36_2.pptx',
+    ]
+    with TestClient(create_app(
+        work_root=tmp_path / 'work',
+        output_root=tmp_path / 'out',
+        merged_root=merged,
+        generator_factory=factory(quiz),
+    )) as client:
+        body = client.post(
+            '/api/preview', json={'kind': 'folder', 'paths': paths}
+        ).json()
+
+    assert body['documents'][0]['action'] == 'reuse'
+    assert target.read_bytes() == b''
+
+
+def test_preview_part_irregularities_are_standalone_with_warnings(tmp_path, quiz):
+    from fastapi.testclient import TestClient
+
+    paths = [
+        'Root/Toan7/Bài 12/T35_1.pptx',
+        'Root/Toan7/Bài 12/T36_1.pptx',
+        'Root/Toan7/Bài 12/alt_T36_1.pptx',
+        'Root/Toan7/Bài 12/T36_2.pptx',
+    ]
+    with TestClient(create_app(
+        work_root=tmp_path / 'work',
+        output_root=tmp_path / 'out',
+        merged_root=tmp_path / 'merged',
+        generator_factory=factory(quiz),
+    )) as client:
+        response = client.post(
+            '/api/preview', json={'kind': 'folder', 'paths': paths}
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body['documents']) == 4
+    assert {document['action'] for document in body['documents']} == {'standalone'}
+    assert all(document['warning'] for document in body['documents'])
+    assert {issue['code'] for issue in body['issues']} == {
+        'missing_part', 'duplicate_part',
+    }
+
+
+@pytest.mark.parametrize('paths', [
+    ['Root/Toan7/Bài 12/notes.pdf', 'Root/Toan7/Bài 12/notes.pptx'],
+    ['Root/../bad.pdf'],
+])
+def test_preview_unsafe_or_colliding_logical_paths_return_400(tmp_path, quiz, paths):
+    from fastapi.testclient import TestClient
+
+    with TestClient(create_app(
+        work_root=tmp_path / 'work',
+        output_root=tmp_path / 'out',
+        merged_root=tmp_path / 'merged',
+        generator_factory=factory(quiz),
+    )) as client:
+        response = client.post(
+            '/api/preview', json={'kind': 'folder', 'paths': paths}
+        )
+
+    assert response.status_code == 400
+
+def pptx_bytes(text='Triangle slide'):
+    archive = BytesIO()
+    with ZipFile(archive, 'w') as zipfile:
+        zipfile.writestr(
+            'ppt/slides/slide1.xml',
+            '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+            f'<a:t>{text}</a:t></p:sld>',
+        )
+    return archive.getvalue()
+
+
+def submit_pptx_pair(client, paths):
+    return client.post(
+        '/api/jobs',
+        data={'kind': 'folder', 'paths': json.dumps(paths)},
+        files=[
+            ('files', (path.rsplit('/', 1)[-1], pptx_bytes(path), 'application/vnd.openxmlformats-officedocument.presentationml.presentation'))
+            for path in paths
+        ],
+    )
+
+
+class FakeMerger:
+    def __init__(self, failure=None):
+        self.failure = failure
+        self.calls = []
+
+    def merge(self, part1, part2, output):
+        from quiz_generator.pptx_merge import MergeResult
+
+        self.calls.append((part1, part2, output))
+        if self.failure:
+            raise self.failure
+        output.write_bytes(pptx_bytes('Merged slide'))
+        return MergeResult(1, 1, 2)
+
+
+def pair_paths():
+    return [
+        'Root/Toan7/Bài 12/T36_1.pptx',
+        'Root/Toan7/Bài 12/T36_2.pptx',
+    ]
+
+
+def test_pair_job_materializes_once_and_outputs_one_logical_json(tmp_path, quiz):
+    from fastapi.testclient import TestClient
+
+    requests = []
+    merger = FakeMerger()
+    app = create_app(
+        work_root=tmp_path / 'work',
+        output_root=tmp_path / 'out',
+        merged_root=tmp_path / 'merged',
+        merger=merger,
+        generator_factory=factory(quiz, lambda request: (
+            requests.append(request),
+            httpx.Response(200, json={'done': True, 'message': {'content': json.dumps(quiz)}}),
+        )[1]),
+    )
+    with TestClient(app) as client:
+        response = submit_pptx_pair(client, pair_paths())
+        assert response.status_code == 202, response.text
+        job = wait_job(client, response.json()['id'])
+
+    assert job['status'] == 'completed'
+    assert len(merger.calls) == 1
+    assert len(requests) == 1
+    assert len(job['sources']) == 2
+    assert len(job['files']) == 1
+    assert job['files'][0]['action'] == 'merge'
+    assert job['files'][0]['members'] == pair_paths()
+    assert job['files'][0]['output'].endswith('T36_Slide.json')
+
+
+def test_existing_merge_skips_worker(tmp_path, quiz):
+    from fastapi.testclient import TestClient
+
+    merged = tmp_path / 'merged'
+    target = merged / 'Toan7/Bài 12/T36/T36_Slide.pptx'
+    target.parent.mkdir(parents=True)
+    target.write_bytes(pptx_bytes('Existing merged'))
+    merger = FakeMerger()
+    with TestClient(create_app(
+        work_root=tmp_path / 'work',
+        output_root=tmp_path / 'out',
+        merged_root=merged,
+        merger=merger,
+        generator_factory=factory(quiz),
+    )) as client:
+        response = submit_pptx_pair(client, pair_paths())
+        job = wait_job(client, response.json()['id'])
+
+    assert job['status'] == 'completed'
+    assert merger.calls == []
+    assert len(job['files']) == 1
+    assert job['files'][0]['action'] == 'reuse'
+
+
+def test_source_merge_failure_becomes_two_standalone_rows(tmp_path, quiz):
+    from fastapi.testclient import TestClient
+    from quiz_generator.pptx_merge import SourceMergeError
+
+    merger = FakeMerger(SourceMergeError('unsupported shape'))
+    with TestClient(create_app(
+        work_root=tmp_path / 'work',
+        output_root=tmp_path / 'out',
+        merged_root=tmp_path / 'merged',
+        merger=merger,
+        generator_factory=factory(quiz),
+    )) as client:
+        response = submit_pptx_pair(client, pair_paths())
+        job = wait_job(client, response.json()['id'])
+
+    assert job['status'] == 'completed'
+    assert len(job['files']) == 2
+    assert {file['action'] for file in job['files']} == {'standalone'}
+    assert all('unsupported shape' in file['warning'] for file in job['files'])
+    assert {file['output'] for file in job['files']} == {
+        'Toan7/Bài 12/T36/T36_1.json',
+        'Toan7/Bài 12/T36/T36_2.json',
+    }
+
+
+def test_infrastructure_merge_failure_fails_job(tmp_path, quiz):
+    from fastapi.testclient import TestClient
+    from quiz_generator.pptx_merge import MergeInfrastructureError
+
+    requests = []
+    merger = FakeMerger(MergeInfrastructureError('node unavailable'))
+    with TestClient(create_app(
+        work_root=tmp_path / 'work',
+        output_root=tmp_path / 'out',
+        merged_root=tmp_path / 'merged',
+        merger=merger,
+        generator_factory=factory(quiz, lambda request: requests.append(request)),
+    )) as client:
+        response = submit_pptx_pair(client, pair_paths())
+        job = wait_job(client, response.json()['id'])
+
+    assert job['status'] == 'failed'
+    assert len(merger.calls) == 1
+    assert requests == []
+    assert job['files'][0]['status'] == 'failed'
+    assert 'node unavailable' in job['error']
+
+
+def test_zip_contains_only_final_logical_json_tree(tmp_path, quiz):
+    from fastapi.testclient import TestClient
+
+    with TestClient(create_app(
+        work_root=tmp_path / 'work',
+        output_root=tmp_path / 'out',
+        merged_root=tmp_path / 'merged',
+        merger=FakeMerger(),
+        generator_factory=factory(quiz),
+    )) as client:
+        response = submit_pptx_pair(client, pair_paths())
+        job = wait_job(client, response.json()['id'])
+        archive = client.get(f"/api/jobs/{job['id']}/download")
+
+    with ZipFile(BytesIO(archive.content)) as zipfile:
+        assert zipfile.namelist() == ['Toan7/Bài 12/T36/T36_Slide.json']
+
+
+def test_restart_resets_merging_row_to_pending_and_marks_interrupted(tmp_path, quiz):
+    from fastapi.testclient import TestClient
+
+    work = tmp_path / 'work'
+    job_id = 'a' * 32
+    metadata = work / job_id / 'job.json'
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text(json.dumps({
+        'id': job_id,
+        'kind': 'folder',
+        'name': 'Root',
+        'status': 'running',
+        'created_at': 1,
+        'updated_at': 1,
+        'error': '',
+        'sources': [{
+            'id': 'source-0',
+            'path': pair_paths()[0],
+            'normalized_path': pair_paths()[0],
+            'size': 1,
+        }],
+        'files': [{
+            'id': 'logical-0',
+            'path': 'Toan7/Bai 12/T36/T36_Slide.pptx',
+            'normalized_path': 'Toan7/Bai 12/T36/T36_Slide.pptx',
+            'members': pair_paths(),
+            'action': 'merge',
+            'warning': '',
+            'size': 2,
+            'status': 'merging',
+            'error': '',
+            'output': None,
+        }],
+    }))
+    with TestClient(create_app(
+        work_root=work,
+        output_root=tmp_path / 'out',
+        merged_root=tmp_path / 'merged',
+        merger=FakeMerger(),
+        generator_factory=factory(quiz),
+    )) as client:
+        job = client.get('/api/jobs/' + job_id).json()
+
+    assert job['status'] == 'interrupted'
+    assert job['files'][0]['status'] == 'pending'
+    assert 'khởi động lại' in job['error']
+
+def test_app_cli_passes_merged_documents_override(tmp_path, monkeypatch):
+    import app as launcher
+
+    captured = {}
+    sentinel = object()
+    monkeypatch.setattr(
+        launcher,
+        'create_app',
+        lambda **options: captured.update(options) or sentinel,
+    )
+    monkeypatch.setattr(
+        launcher.uvicorn,
+        'run',
+        lambda application, **options: captured.update(
+            application=application, server=options
+        ),
+    )
+
+    launcher.main([
+        '--merged-documents', str(tmp_path / 'shared-merged'),
+        '--host', '127.0.0.2',
+        '--port', '8765',
+    ])
+
+    assert captured['merged_root'] == tmp_path / 'shared-merged'
+    assert captured['application'] is sentinel
+    assert captured['server'] == {'host': '127.0.0.2', 'port': 8765}

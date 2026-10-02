@@ -1,6 +1,7 @@
-"""Durable UI jobs with one sequential worker and lossless output paths."""
+"""Durable UI jobs with one sequential worker and logical quiz documents."""
 
 from copy import deepcopy
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -10,16 +11,27 @@ import uuid
 
 from .inputs import validate_relative_path
 from .pipeline import OutputLock, QuizRunner, atomic_json
+from .planning import DocumentPlan, PlannedDocument, SourceFile, plan_documents
+from .pptx_merge import NodePptxMerger, PptxMaterializer
 
 LOG = logging.getLogger(__name__)
 ACTIVE = {'queued', 'running', 'stopping'}
 
 
 class JobManager:
-    def __init__(self, work_root: Path, output_root: Path, generator_factory):
+    def __init__(
+        self,
+        work_root: Path,
+        output_root: Path,
+        generator_factory,
+        merged_root: Path,
+        merger: NodePptxMerger | None = None,
+    ):
         self.work_root = work_root.resolve()
         self.output_root = output_root.resolve()
+        self.merged_root = merged_root.resolve()
         self.generator_factory = generator_factory
+        self.materializer = PptxMaterializer(merger or NodePptxMerger())
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
         self.jobs = {}
@@ -29,26 +41,48 @@ class JobManager:
         self.shutdown_event = threading.Event()
         self.work_root.mkdir(parents=True, exist_ok=True)
         self._load()
-        self.worker = threading.Thread(target=self._dispatch, daemon=True, name='quiz-queue')
+        self.worker = threading.Thread(
+            target=self._dispatch, daemon=True, name='quiz-queue'
+        )
         self.worker.start()
 
     def _load(self):
         for metadata in self.work_root.glob('*/job.json'):
             try:
                 job = json.loads(metadata.read_text(encoding='utf-8'))
-                if job['id'] != metadata.parent.name or not isinstance(job['files'], list):
+                if job['id'] != metadata.parent.name or not isinstance(
+                    job['files'], list
+                ):
                     continue
+                if not isinstance(job.get('sources'), list):
+                    job['sources'] = [
+                        {
+                            'id': f"source-{source['id']}",
+                            'path': source['path'],
+                            'normalized_path': source['normalized_path'],
+                            'size': source.get('size', 0),
+                        }
+                        for source in job['files']
+                    ]
+                for source in job['sources']:
+                    validate_relative_path(source['path'])
+                    validate_relative_path(source['normalized_path'])
                 for file in job['files']:
                     validate_relative_path(file['path'])
                     validate_relative_path(file['normalized_path'])
+                    for member in file.get('members', ()):
+                        validate_relative_path(member)
                     if file.get('output'):
                         validate_relative_path(file['output'])
                 if job['status'] in ('running', 'stopping'):
                     job['status'] = 'interrupted'
                     for file in job['files']:
-                        if file['status'] in ('reading', 'generating'):
+                        if file['status'] in ('merging', 'reading', 'generating'):
                             file['status'] = 'pending'
-                    job['error'] = 'Ứng dụng đã khởi động lại. Các quiz hoàn thành vẫn có thể tải xuống.'
+                    job['error'] = (
+                        'Ứng dụng đã khởi động lại. '
+                        'Các quiz hoàn thành vẫn có thể tải xuống.'
+                    )
                     atomic_json(metadata, job)
                 self.jobs[job['id']] = job
                 self.stop_events[job['id']] = threading.Event()
@@ -65,20 +99,92 @@ class JobManager:
         with self.lock:
             self.reserved.discard(job_id)
 
+    @staticmethod
+    def _logical_id(document: PlannedDocument) -> str:
+        identity = f'{document.state_key}\0{document.output_path}'
+        return hashlib.sha256(identity.encode('utf-8')).hexdigest()[:20]
+
+    def _sources(self, job) -> tuple[SourceFile, ...]:
+        input_root = self.work_root / job['id'] / 'input'
+        return tuple(
+            SourceFile(
+                path=input_root / source['normalized_path'],
+                normalized_path=source['normalized_path'],
+                original_path=source['path'],
+            )
+            for source in job['sources']
+        )
+
+    def _plan(self, job) -> DocumentPlan:
+        plan = plan_documents(self._sources(job), self.merged_root)
+        fatal = [issue for issue in plan.issues if issue.fatal]
+        if fatal:
+            raise ValueError('; '.join(issue.message for issue in fatal))
+        return plan
+
+    def _row(self, document: PlannedDocument, sizes: dict, previous=None) -> dict:
+        previous = previous or {}
+        member_sizes = sum(sizes.get(member.normalized_path, 0) for member in document.members)
+        return {
+            'id': self._logical_id(document),
+            'path': document.prompt_path,
+            'normalized_path': document.state_key,
+            'members': [member.original_path for member in document.members],
+            'action': document.action,
+            'warning': document.warning,
+            'size': member_sizes,
+            'status': previous.get('status', 'pending'),
+            'error': previous.get('error', ''),
+            'output': previous.get('output'),
+            **({'pages': previous['pages']} if 'pages' in previous else {}),
+        }
+
+    def _reconcile(self, job, documents):
+        previous = {
+            file['normalized_path']: file
+            for file in job['files']
+        }
+        sizes = {
+            source['normalized_path']: source.get('size', 0)
+            for source in job['sources']
+        }
+        job['files'] = [
+            self._row(document, sizes, previous.get(document.state_key))
+            for document in documents
+        ]
+        self._save(job)
+
     def start(self, job_id: str, kind: str, mapping: dict, sizes: dict) -> dict:
         with self.lock:
             now = time.time()
-            job = {
-                'id': job_id, 'kind': kind, 'name': next(iter(mapping.values())).split('/')[0],
-                'status': 'queued', 'created_at': now, 'updated_at': now, 'error': '',
-                'files': [{'id': str(index), 'path': original, 'normalized_path': normalized,
-                           'size': sizes[normalized], 'status': 'pending', 'error': '', 'output': None}
-                          for index, (normalized, original) in enumerate(mapping.items())],
+            sources = [
+                {
+                    'id': f'source-{index}',
+                    'path': original,
+                    'normalized_path': normalized,
+                    'size': sizes[normalized],
+                }
+                for index, (normalized, original) in enumerate(mapping.items())
+            ]
+            provisional = {
+                'id': job_id,
+                'kind': kind,
+                'name': next(iter(mapping.values())).split('/')[0],
+                'status': 'queued',
+                'created_at': now,
+                'updated_at': now,
+                'error': '',
+                'sources': sources,
+                'files': [],
             }
-            self.jobs[job_id] = job
+            plan = self._plan(provisional)
+            provisional['files'] = [
+                self._row(document, sizes) for document in plan.documents
+            ]
+            self.jobs[job_id] = provisional
             self.stop_events[job_id] = threading.Event()
             self.reserved.discard(job_id)
-            self._save(job)
+            self._save(provisional)
             self.condition.notify_all()
             return self.snapshot(job_id)
 
@@ -98,15 +204,35 @@ class JobManager:
                     break
             self._save(job)
 
+    def _merge_progress(self, job_id, event):
+        statuses = {
+            'merging': 'merging',
+            'merged': 'pending',
+            'reused': 'reused',
+            'merge_fallback': 'pending',
+        }
+        with self.lock:
+            job = self.jobs[job_id]
+            for file in job['files']:
+                if file['normalized_path'] == event['state_key']:
+                    file['status'] = statuses[event['event']]
+                    if event.get('warning'):
+                        file['warning'] = event['warning']
+                    break
+            self._save(job)
+
     def _next_queued_locked(self):
         queued = [job for job in self.jobs.values() if job['status'] == 'queued']
-        return min(queued, key=lambda job: (job['created_at'], job['id'])) if queued else None
+        return min(
+            queued, key=lambda job: (job['created_at'], job['id'])
+        ) if queued else None
 
     def _dispatch(self):
         while True:
             with self.condition:
                 self.condition.wait_for(
-                    lambda: self.shutdown_event.is_set() or self._next_queued_locked() is not None
+                    lambda: self.shutdown_event.is_set()
+                    or self._next_queued_locked() is not None
                 )
                 if self.shutdown_event.is_set():
                     return
@@ -127,18 +253,40 @@ class JobManager:
             with self.lock:
                 job = self.jobs[job_id]
                 job['model'] = generator.model
-                job['status'] = 'stopping' if self.stop_events[job_id].is_set() else 'running'
+                job['status'] = (
+                    'stopping'
+                    if self.stop_events[job_id].is_set()
+                    else 'running'
+                )
                 self._save(job)
-                mapping = {file['normalized_path']: file['path'] for file in job['files']}
+                plan = self._plan(job)
             output = self.output_root / job_id
             with OutputLock(output):
-                runner = QuizRunner(self.work_root / job_id / 'input', output, generator,
-                                    path_mapping=mapping, stop_event=self.stop_events[job_id],
-                                    on_progress=lambda event: self._progress(job_id, event))
+                final_plan = self.materializer.materialize(
+                    plan,
+                    lambda event: self._merge_progress(job_id, event),
+                )
+                with self.lock:
+                    job = self.jobs[job_id]
+                    self._reconcile(job, final_plan.documents)
+                runner = QuizRunner(
+                    self.work_root / job_id / 'input',
+                    output,
+                    generator,
+                    document_provider=lambda: final_plan.documents,
+                    stop_event=self.stop_events[job_id],
+                    on_progress=lambda event: self._progress(job_id, event),
+                )
                 summary = runner.run_once()
             with self.lock:
-                job['status'] = ('stopped' if self.stop_events[job_id].is_set() else
-                                 'completed_with_errors' if summary.failed else 'completed')
+                job = self.jobs[job_id]
+                job['status'] = (
+                    'stopped'
+                    if self.stop_events[job_id].is_set()
+                    else 'completed_with_errors'
+                    if summary.failed
+                    else 'completed'
+                )
                 self._save(job)
         except Exception as error:
             message = str(error)
@@ -149,7 +297,7 @@ class JobManager:
                 job = self.jobs[job_id]
                 job['status'], job['error'] = 'failed', message
                 for file in job['files']:
-                    if file['status'] in ('reading', 'generating'):
+                    if file['status'] in ('merging', 'reading', 'generating'):
                         file['status'], file['error'] = 'failed', message
                 self._save(job)
         finally:
@@ -161,7 +309,13 @@ class JobManager:
             if job_id not in self.jobs:
                 raise KeyError(job_id)
             job = deepcopy(self.jobs[job_id])
-            counts = {'total': len(job['files']), 'done': 0, 'failed': 0, 'pending': 0, 'active': 0}
+            counts = {
+                'total': len(job['files']),
+                'done': 0,
+                'failed': 0,
+                'pending': 0,
+                'active': 0,
+            }
             for file in job['files']:
                 if file['status'] in ('done', 'skipped'):
                     counts['done'] += 1
@@ -173,19 +327,35 @@ class JobManager:
                     counts['active'] += 1
             job['counts'] = counts
             queued = sorted(
-                (candidate for candidate in self.jobs.values() if candidate['status'] == 'queued'),
-                key=lambda candidate: (candidate['created_at'], candidate['id']),
+                (
+                    candidate
+                    for candidate in self.jobs.values()
+                    if candidate['status'] == 'queued'
+                ),
+                key=lambda candidate: (
+                    candidate['created_at'], candidate['id']
+                ),
             )
-            job['queue_position'] = (
-                next((index for index, candidate in enumerate(queued, 1)
-                      if candidate['id'] == job_id), None)
+            job['queue_position'] = next(
+                (
+                    index
+                    for index, candidate in enumerate(queued, 1)
+                    if candidate['id'] == job_id
+                ),
+                None,
             )
             return job
 
     def list_jobs(self):
         with self.lock:
-            return [self.snapshot(job_id) for job_id in
-                    sorted(self.jobs, key=lambda key: self.jobs[key]['created_at'], reverse=True)]
+            return [
+                self.snapshot(job_id)
+                for job_id in sorted(
+                    self.jobs,
+                    key=lambda key: self.jobs[key]['created_at'],
+                    reverse=True,
+                )
+            ]
 
     def stop(self, job_id: str) -> dict:
         with self.lock:
@@ -205,8 +375,15 @@ class JobManager:
 
     def result_path(self, job_id: str, file_id: str) -> tuple[Path, str]:
         job = self.snapshot(job_id)
-        file = next((file for file in job['files'] if file['id'] == file_id), None)
-        if not file or file['status'] not in ('done', 'skipped') or not file.get('output'):
+        file = next(
+            (file for file in job['files'] if file['id'] == file_id),
+            None,
+        )
+        if (
+            not file
+            or file['status'] not in ('done', 'skipped')
+            or not file.get('output')
+        ):
             raise KeyError(file_id)
         validate_relative_path(file['output'])
         root = (self.output_root / job_id).resolve()
