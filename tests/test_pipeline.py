@@ -178,3 +178,118 @@ def test_stop_finishes_current_file_but_skips_next(tmp_path, quiz):
     assert runner.run_once().generated == 1
     assert (output / 'a.pdf.json').is_file()
     assert not (output / 'b.pdf.json').exists()
+
+def planned(path, *, state_key, prompt_path, output_path):
+    from quiz_generator.planning import PlannedDocument, SourceFile
+
+    member = SourceFile(path=path, normalized_path=state_key, original_path=prompt_path)
+    return PlannedDocument(
+        source_path=path,
+        state_key=state_key,
+        prompt_path=prompt_path,
+        output_path=output_path,
+        kind='merged',
+        action='reuse',
+        members=(member,),
+    )
+
+
+def test_planned_document_can_live_outside_source_root(tmp_path, quiz):
+    source_root = tmp_path / 'documents'
+    source_root.mkdir()
+    physical = tmp_path / 'shared-merged' / 'T36_Slide.pdf'
+    pdf(physical)
+    document = planned(
+        physical,
+        state_key='Toan7/Bai 12/T36/T36_Slide.pptx',
+        prompt_path='Toan7/Bai 12/T36/T36_Slide.pptx',
+        output_path='Toan7/Bài 12/T36/T36_Slide.json',
+    )
+    output = tmp_path / 'outputs'
+
+    summary = pipeline().QuizRunner(
+        source_root,
+        output,
+        generator(quiz),
+        document_provider=lambda: [document],
+    ).run_once()
+
+    assert summary.generated == 1
+    assert (output / document.output_path).is_file()
+
+
+def test_planned_paths_drive_state_prompt_output_and_events(tmp_path, quiz):
+    source_root = tmp_path / 'documents'
+    source_root.mkdir()
+    physical = tmp_path / 'shared-merged' / 'opaque.pdf'
+    pdf(physical)
+    document = planned(
+        physical,
+        state_key='state/Toan7/T36_Slide.pptx',
+        prompt_path='prompt/Toan7/T36_Slide.pptx',
+        output_path='result/Toan7/T36_Slide.json',
+    )
+    prompts = []
+    events = []
+
+    def handler(request):
+        prompts.append(json.loads(request.content)['messages'][1]['content'])
+        return httpx.Response(
+            200,
+            json={'done': True, 'message': {'content': json.dumps(quiz)}},
+        )
+
+    runner = pipeline().QuizRunner(
+        source_root,
+        tmp_path / 'outputs',
+        generator(quiz, handler),
+        document_provider=lambda: [document],
+        on_progress=events.append,
+    )
+
+    assert runner.run_once().generated == 1
+    assert document.prompt_path in prompts[0]
+    assert [event['path'] for event in events] == [document.state_key] * 3
+    assert events[-1]['output'] == document.output_path
+    state = json.loads((tmp_path / 'outputs/.quiz-state.json').read_text())
+    assert list(state['files']) == [document.state_key]
+    assert state['files'][document.state_key]['output'] == document.output_path
+
+
+def test_provider_is_recalled_on_every_watch_pass(tmp_path, quiz):
+    source_root = tmp_path / 'documents'
+    source_root.mkdir()
+    first_path = tmp_path / 'shared' / 'first.pdf'
+    second_path = tmp_path / 'shared' / 'second.pdf'
+    pdf(first_path)
+    pdf(second_path)
+    first = planned(
+        first_path,
+        state_key='logical/first.pdf',
+        prompt_path='logical/first.pdf',
+        output_path='logical/first.json',
+    )
+    second = planned(
+        second_path,
+        state_key='logical/second.pdf',
+        prompt_path='logical/second.pdf',
+        output_path='logical/second.json',
+    )
+    calls = []
+
+    def provider():
+        calls.append(None)
+        return [first] if len(calls) == 1 else [first, second]
+
+    runner = pipeline().QuizRunner(
+        source_root,
+        tmp_path / 'outputs',
+        generator(quiz),
+        document_provider=provider,
+    )
+
+    assert runner.run_once().generated == 1
+    summary = runner.run_once()
+    assert (summary.generated, summary.skipped) == (1, 1)
+    assert len(calls) == 2
+    assert (tmp_path / 'outputs/logical/second.json').is_file()

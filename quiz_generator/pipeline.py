@@ -13,6 +13,7 @@ import time
 from .documents import discover_documents, read_document
 from .llm import FatalAPIError, validate_quiz
 from .inputs import validate_relative_path, validate_output_paths
+from .planning import PlannedDocument, SourceFile
 
 LOG = logging.getLogger(__name__)
 
@@ -75,7 +76,8 @@ class RunSummary:
 class QuizRunner:
     def __init__(self, documents_root: Path, output_root: Path, generator, *,
                  reader_options=None, failure_cooldown: float = 300,
-                 path_mapping=None, on_progress=None, stop_event=None):
+                 path_mapping=None, on_progress=None, stop_event=None,
+                 document_provider=None):
         self.documents_root = documents_root.resolve()
         self.output_root = output_root.resolve()
         self.generator = generator
@@ -88,6 +90,8 @@ class QuizRunner:
                 validate_relative_path(original)
             validate_output_paths(list(self.path_mapping.values()))
         self.on_progress = on_progress
+        self.document_provider = document_provider or self._default_documents
+        self._last_state_keys = set()
         self.stop_event = stop_event
         self.state_path = self.output_root / '.quiz-state.json'
         self.state = {'version': 1, 'files': {}}
@@ -102,15 +106,66 @@ class QuizRunner:
             except (ValueError, OSError):
                 LOG.warning('State không đọc được; sẽ kiểm tra và xử lý lại các tài liệu.')
 
-    def _fingerprint(self, path: Path) -> str:
+    def _default_documents(self):
+        documents = []
+        for path in discover_documents(self.documents_root):
+            relative = path.relative_to(self.documents_root).as_posix()
+            original = (
+                self.path_mapping[relative]
+                if self.path_mapping is not None
+                else relative
+            )
+            member = SourceFile(path, relative, original)
+            documents.append(PlannedDocument(
+                source_path=path,
+                state_key=relative,
+                prompt_path=relative,
+                output_path=original + '.json',
+                kind='standalone',
+                action='standalone',
+                members=(member,),
+            ))
+        return documents
+
+    def _planned_documents(self):
+        documents = tuple(self.document_provider())
+        state_keys = set()
+        output_keys = set()
+        for document in documents:
+            if not isinstance(document, PlannedDocument):
+                raise TypeError('Document provider phải trả về PlannedDocument.')
+            validate_relative_path(document.state_key)
+            validate_relative_path(document.prompt_path)
+            validate_relative_path(document.output_path)
+            if document.source_path is None:
+                raise ValueError('Tài liệu chưa có đường dẫn vật lý.')
+            if document.state_key in state_keys:
+                raise ValueError(f'Trùng state key: {document.state_key}')
+            output_key = document.output_path.casefold()
+            if output_key in output_keys:
+                raise ValueError(f'Trùng output quiz: {document.output_path}')
+            state_keys.add(document.state_key)
+            output_keys.add(output_key)
+            self._output_path(document.output_path)
+        self._last_state_keys = state_keys
+        return documents
+
+    def _output_path(self, relative: str) -> Path:
+        target = (self.output_root / relative).resolve()
+        if not target.is_relative_to(self.output_root):
+            raise ValueError('Đường dẫn quiz output nằm ngoài thư mục được cấu hình.')
+        return target
+
+    def _fingerprint(self, document: PlannedDocument) -> str:
         context = {
             'source_root': str(self.documents_root), 'model': self.generator.model,
             'prompt': self.generator.system_prompt, 'base_url': self.generator.base_url,
             'temperature': self.generator.temperature, 'max_tokens': self.generator.max_tokens,
-            'reader': self.reader_options, 'pipeline_version': 1,
+            'reader': self.reader_options, 'pipeline_version': 2,
+            'prompt_path': document.prompt_path,
+            'output_path': document.output_path,
         }
-        if self.path_mapping is not None:
-            context['original_path'] = self.path_mapping[path.relative_to(self.documents_root).as_posix()]
+        path = document.source_path
         digest = hashlib.sha256(json.dumps(context, sort_keys=True).encode('utf-8'))
         with path.open('rb') as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b''):
@@ -127,8 +182,10 @@ class QuizRunner:
             return False
 
     def has_unresolved_failures(self) -> bool:
-        return any(entry.get('status') == 'failed' and (self.documents_root / relative).is_file()
-                   for relative, entry in self.state['files'].items())
+        return any(
+            self.state['files'].get(key, {}).get('status') == 'failed'
+            for key in self._last_state_keys
+        )
 
     def _emit(self, relative: str, status: str, **details):
         if self.on_progress is not None:
@@ -136,21 +193,21 @@ class QuizRunner:
 
     def run_once(self, *, force: bool = False, limit: int | None = None) -> RunSummary:
         summary = RunSummary()
-        for path in discover_documents(self.documents_root):
+        for planned in self._planned_documents():
             if self.stop_event is not None and self.stop_event.is_set():
                 break
             if limit is not None and summary.attempted >= limit:
                 break
-            relative = path.relative_to(self.documents_root).as_posix()
-            original = self.path_mapping[relative] if self.path_mapping is not None else relative
-            output = self.output_root / (original + '.json')
-            entry = self.state['files'].get(relative, {})
+            path = planned.source_path
+            relative = planned.state_key
+            output = self._output_path(planned.output_path)
+            entry = self.state['files'].get(planned.state_key, {})
             fingerprint = None
             try:
-                fingerprint = self._fingerprint(path)
+                fingerprint = self._fingerprint(planned)
                 if not force and self._done(output, entry, fingerprint, relative):
                     summary.skipped += 1
-                    self._emit(relative, 'skipped', output=original + '.json')
+                    self._emit(relative, 'skipped', output=planned.output_path)
                     continue
                 if (not force and entry.get('status') == 'failed'
                         and entry.get('fingerprint') == fingerprint
@@ -163,19 +220,19 @@ class QuizRunner:
                 LOG.info('Nguồn: %d trang/slide, %d ảnh, %d ký tự text.',
                          document.page_count, len(document.images), len(document.text))
                 self._emit(relative, 'generating', pages=document.page_count)
-                quiz = self.generator.generate(document, relative)
-                if fingerprint != self._fingerprint(path):
+                quiz = self.generator.generate(document, planned.prompt_path)
+                if fingerprint != self._fingerprint(planned):
                     raise ValueError('Tài liệu thay đổi trong khi sinh quiz; sẽ xử lý lại phiên bản mới.')
                 # Validate again at the persistence boundary.
-                validate_quiz(json.dumps(quiz, ensure_ascii=False), relative)
+                validate_quiz(json.dumps(quiz, ensure_ascii=False), planned.prompt_path)
                 atomic_json(output, quiz)
                 self.state['files'][relative] = {
                     'fingerprint': fingerprint, 'status': 'done',
-                    'output': str(output.relative_to(self.output_root)), 'updated_at': time.time(),
+                    'output': planned.output_path, 'updated_at': time.time(),
                 }
                 summary.generated += 1
                 LOG.info('Đã lưu: %s', output)
-                event = {'status': 'done', 'output': original + '.json'}
+                event = {'status': 'done', 'output': planned.output_path}
             except FatalAPIError:
                 raise
             except Exception as error:
