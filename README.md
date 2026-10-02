@@ -13,8 +13,10 @@ Sau khi cài dependencies, chạy:
 Mở **http://127.0.0.1:8000**. Có thể đổi port với `--port 8001`, hoặc dùng file cấu hình khác với `--env-file /path/.env`.
 
 1. Chọn **Một file** để tải một PDF/PPTX, hoặc **Cả thư mục** để tải các tài liệu trong folder và toàn bộ folder con.
-2. Xem cây thư mục ở **Tên gốc** hoặc **Tên xử lý**, rồi bấm **Bắt đầu tạo quiz**. Mỗi file được sinh lần lượt.
-3. Theo dõi trạng thái từng tài liệu, bấm **Xem quiz**, tải JSON riêng hoặc **Tải toàn bộ ZIP**.
+2. Xem cây thư mục và kế hoạch tài liệu. Một cặp PPTX hợp lệ hiện thành một tài liệu **Sẽ ghép** với tên của cả hai part; file lẻ hiện thành **Tài liệu độc lập**.
+3. Bấm **Bắt đầu tạo quiz**, theo dõi các trạng thái **Đang ghép**, **Dùng bản đã ghép**, **Đang đọc** và **Đang tạo**; sau đó xem quiz, tải JSON riêng hoặc tải toàn bộ ZIP.
+
+Preview chỉ là kế hoạch theo tên file. Server lập lại kế hoạch sau khi upload an toàn; nếu PPTX không hỗ trợ ghép (ví dụ slide không có ảnh), hai part được cảnh báo và xử lý độc lập. Lỗi cấu hình Node/npm được báo lỗi thay vì âm thầm bỏ qua ghép.
 
 Nút **Dừng sau file này** cho file đang gọi LLM hoàn thành rồi dừng hàng đợi. Các quiz đã xong vẫn tải được. Reload tab giữ lại lượt gần nhất; sidebar lưu các lượt gần đây. Nếu server khởi động lại giữa lượt, lượt đó được đánh dấu gián đoạn và kết quả hoàn thành vẫn được giữ.
 
@@ -32,10 +34,10 @@ Bản làm việc:
 Lop 7/Mon/Toan/Bai 12/Tiet 36/De.pdf
 
 Output trên đĩa:
-outputs/ui/<job-id>/Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề.pdf.json
+outputs/ui/<job-id>/Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề.json
 
 Bên trong ZIP:
-Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề.pdf.json
+Lớp 7/Môn/Toán/Bài 12/Tiết 36/Đề.json
 ```
 
 Bảng ánh xạ được lưu tại `.quiz-ui/jobs/<job-id>/path-mapping.json`. Output lấy lại **tên gốc chính xác** từ bảng này, kể cả Unicode tổ hợp; không đoán ngược dấu từ tên đã normalize. Nếu các tên như `Má` và `Ma` trùng sau bỏ dấu, bản làm việc thêm suffix riêng, còn output vẫn giữ tên gốc.
@@ -51,14 +53,25 @@ Khi upload nhiều:
 - Batch tiếp theo chỉ bắt đầu sau khi batch hiện tại hoàn thành hoặc dừng.
 - Có thể huỷ một batch đang chờ mà không gọi LLM; với batch đang chạy, nút dừng hoàn tất file hiện tại rồi ngừng.
 
-## Cài đặt
+## Cài đặt trên Ubuntu
 
-Yêu cầu Python 3.10+ trên Linux/macOS (khóa worker dùng `fcntl`).
+Yêu cầu Python 3.10+ và Node.js 20+ trên Ubuntu. Python chạy pipeline/website; Node cùng `jszip` và `pptxgenjs` chạy worker ghép PPTX native trong repo này.
+
+Cài tự động dependencies vào `.venv` và `node_modules`:
 
 ```bash
-python -m venv .venv
+./setup-ubuntu.sh
+```
+
+Script kiểm tra phiên bản, tạo hoặc tái sử dụng `.venv`, cài `requirements.txt` và chạy `npm ci`. Script không tạo, ghi đè hoặc sửa file cấu hình bí mật. Việc khởi chạy ứng dụng cũng không tự cài package.
+
+Cài thủ công tương đương:
+
+```bash
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+npm ci
 ```
 
 File `.env` hiện có được giữ nguyên. Khi thiết lập dự án ở máy khác, copy `.env.example` thành `.env` và điền:
@@ -69,6 +82,16 @@ LLM_MODEL_NAME=gemma4:31b
 ```
 
 Gọi trực tiếp `https://ollama.com/api/chat`, không cần chạy Ollama local. Có thể đổi `OLLAMA_BASE_URL` trong `.env`. Biến môi trường của shell được ưu tiên hơn file `.env`. Key không được ghi vào JSON/state/log.
+
+Ba đường dẫn dùng chung mặc định là:
+
+```dotenv
+QUIZ_DOCUMENTS_DIR=/home/meconlonton/Documents/quiz/documents
+QUIZ_MERGED_DOCUMENTS_DIR=/home/meconlonton/Documents/quiz/merged-documents
+QUIZ_OUTPUT_DIR=/home/meconlonton/Documents/quiz/documents/output
+```
+
+CLI flag ưu tiên cao hơn biến shell, biến shell ưu tiên cao hơn file cấu hình. CLI, watch và website phải trỏ chung `QUIZ_MERGED_DOCUMENTS_DIR` để tái sử dụng cùng bản ghép.
 
 ## Chạy
 
@@ -99,7 +122,8 @@ python generate_quiz.py --limit 1
 python generate_quiz.py --force
 
 # Đổi thư mục, file cấu hình và khoảng quét
-python generate_quiz.py --documents /path/documents --output /path/outputs \
+python generate_quiz.py --documents /path/documents \
+  --merged-documents /path/merged-documents --output /path/outputs \
   --env-file /path/.env --watch --interval 15
 
 python generate_quiz.py --help
@@ -107,9 +131,33 @@ python generate_quiz.py --help
 
 Đường dẫn mặc định được tính từ thư mục chứa script, nên có thể chạy script từ thư mục khác. Thư mục nguồn cần tồn tại; với `--watch` có thể bắt đầu từ thư mục rỗng.
 
+## Tự nhận diện và ghép PPTX part
+
+Đây là chế độ mặc định của CLI, `--watch` và website. Hệ thống quét đệ quy, nhận diện không phân biệt hoa/thường và dấu tiếng Việt. Tên dạng `T36_1.pptx`, `T36_2.pptx` hoặc `TOAN7_C4_B12_T36_1_fixed.pptx` được ghép khi có đúng một part 1 và một part 2 thuộc cùng lớp/bài/tiết. Thứ tự luôn là part 1 rồi part 2.
+
+Ví dụ một cặp hợp lệ:
+
+```text
+documents/Toan7/Toan7 pptx/Bai 12/T36_1.pptx
+documents/Toan7/Toan7 pptx/Bai 12/T36_2.pptx
+
+merged-documents/Toan7/Bai 12/T36/T36_Slide.pptx
+documents/output/Toan7/Bai 12/T36/T36_Slide.json
+```
+
+Nếu chỉ có một part, trùng part, tên không nhận diện được hoặc tiết trong folder mâu thuẫn với tên file, mỗi file được xử lý độc lập và có cảnh báo. Ví dụ `T36_1.pptx` đứng một mình tạo `Toan7/Bai 12/T36/T36_1.json`.
+
+File ghép dùng chung là **bất biến** đối với workflow: nếu `T36_Slide.pptx` đã tồn tại, hệ thống dùng lại ngay, không so sánh timestamp/hash và không ghi đè dù part nguồn thay đổi. Muốn cố ý ghép lại, hãy dừng worker rồi tự chuyển hoặc xóa file ghép hiện có; lượt tiếp theo sẽ tạo lại từ part 1 và part 2.
+
+`--list` chỉ in kế hoạch `merge`, `reuse merged`, `standalone` và cảnh báo; không tạo PPTX, JSON hay gọi API:
+
+```bash
+python generate_quiz.py --list
+```
+
 ## Input và output
 
-Hỗ trợ `.pdf` và `.pptx`, kể cả đuôi viết hoa, ở mọi cấp thư mục. Không gộp nhiều tài liệu vào cùng quiz.
+Hỗ trợ `.pdf` và `.pptx`, kể cả đuôi viết hoa, ở mọi cấp thư mục. Mỗi tài liệu logic sinh một quiz; một cặp PPTX part hợp lệ được tính là một tài liệu logic.
 
 ```text
 documents/
@@ -117,15 +165,15 @@ documents/
     ├── lesson.pdf
     └── TOAN7_C4_B12_T36_2_fixed.pptx
 
-outputs/
+documents/output/
 ├── .quiz-state.json
 ├── .quiz-worker.lock
 └── Lop/Lop7/Mon/Toan7/Bai12/Tiet36/
-    ├── lesson.pdf.json
-    └── TOAN7_C4_B12_T36_2_fixed.pptx.json
+    ├── lesson.json
+    └── TOAN7_C4_B12_T36_2_fixed.json
 ```
 
-Giữ cả đuôi nguồn trong tên JSON để `lesson.pdf` và `lesson.pptx` không ghi đè nhau. Không suy diễn hoặc đổi tên các cấp thư mục; mọi cấp lớp/môn/[Môn học]/[Bài]/[Tiết] được giữ nguyên.
+JSON dùng stem nguồn. Planner báo lỗi trước khi xử lý nếu hai tài liệu dẫn đến cùng đường dẫn JSON, vì vậy không có file nào âm thầm ghi đè file khác. Tài liệu không nhận diện được lớp/bài/tiết giữ cây thư mục nguồn an toàn; cặp part hợp lệ dùng cấu trúc chuẩn lớp/bài/tiết như trên.
 
 - **PDF:** gửi text trích xuất và ảnh của từng trang để model đọc cả công thức, hình minh họa, bản scan. PDF có mật khẩu cần được mở khóa trước.
 - **PPTX:** gửi text và ảnh nhúng theo thứ tự slide. PPTX đang có trong dự án gồm 20 slide ảnh và được hỗ trợ theo cách này. Shape, biểu đồ hoặc bố cục PPTX phức tạp không được render hoàn chỉnh; hãy xuất thành PDF để giữ đủ hình thức trình bày.

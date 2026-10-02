@@ -12,6 +12,35 @@ import pymupdf
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'generate_quiz.py'
+REPO_ROOT = SCRIPT.parent
+
+
+def test_setup_ubuntu_script_has_valid_syntax_and_install_contract():
+    setup = REPO_ROOT / 'setup-ubuntu.sh'
+
+    result = subprocess.run(
+        ['bash', '-n', str(setup)], capture_output=True, text=True
+    )
+
+    assert result.returncode == 0, result.stderr
+    content = setup.read_text()
+    assert 'Python 3.10' in content
+    assert 'Node.js 20' in content
+    assert 'requirements.txt' in content
+    assert 'npm ci' in content
+    assert '.env' not in content
+
+
+def test_env_example_documents_quiz_paths_without_secret():
+    content = (REPO_ROOT / '.env.example').read_text()
+
+    assert 'QUIZ_DOCUMENTS_DIR=/home/meconlonton/Documents/quiz/documents' in content
+    assert (
+        'QUIZ_MERGED_DOCUMENTS_DIR=/home/meconlonton/Documents/quiz/merged-documents'
+        in content
+    )
+    assert 'QUIZ_OUTPUT_DIR=/home/meconlonton/Documents/quiz/documents/output' in content
+    assert '123' not in content
 
 
 def test_list_does_not_require_api_key(tmp_path):
