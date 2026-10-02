@@ -48,6 +48,7 @@ class PlannedDocument:
 class DocumentPlan:
     documents: tuple[PlannedDocument, ...]
     issues: tuple[PlanIssue, ...]
+    merged_root: Path | None = None
 
 
 def _fold(value: str) -> str:
@@ -247,4 +248,4 @@ def plan_documents(sources, merged_root: Path) -> DocumentPlan:
             fatal=True,
         ))
 
-    return DocumentPlan(tuple(documents), tuple(issues))
+    return DocumentPlan(tuple(documents), tuple(issues), merged_root.resolve())
