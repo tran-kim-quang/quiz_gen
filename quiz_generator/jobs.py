@@ -148,6 +148,7 @@ class JobManager:
                 runner = QuizRunner(self.work_root / job_id / 'input', output, generator,
                                     path_mapping=mapping, stop_event=self.stop_events[job_id],
                                     group_leaf_folders=job.get('kind') == 'folder',
+                                    state_path=self.work_root / job_id / '.quiz-state.json',
                                     on_progress=lambda event: self._progress(job_id, event))
                 summary = runner.run_once()
             with self.lock:

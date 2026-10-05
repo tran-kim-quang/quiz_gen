@@ -17,7 +17,7 @@ def test_discovery_recursive_case_insensitive_and_stable(tmp_path):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
-    assert [str(p.relative_to(tmp_path)) for p in api().discover_documents(tmp_path)] == [
+    assert [p.relative_to(tmp_path).as_posix() for p in api().discover_documents(tmp_path)] == [
         'Lop7/Toan/Bai12/Tiet36/b.PDF', 'Lop8/a.pptx',
     ]
 
@@ -80,6 +80,35 @@ def test_pptx_slide_order_and_images(tmp_path):
     assert document.page_count == 3
     assert document.text.index('Slide 1\n') < document.text.index('Slide 2\n') < document.text.index('Slide 10\n')
     assert len(document.images) == 3
+
+
+def test_pptx_accepts_absolute_opc_relationship_targets(tmp_path):
+    source = tmp_path / 'absolute-targets.pptx'
+    image = BytesIO()
+    Image.new('RGB', (32, 32), 'blue').save(image, format='PNG')
+    with ZipFile(source, 'w') as archive:
+        archive.writestr('ppt/presentation.xml', '''<p:presentation
+            xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+            <p:sldIdLst><p:sldId r:id="rId1"/></p:sldIdLst></p:presentation>''')
+        archive.writestr('ppt/_rels/presentation.xml.rels', '''<Relationships>
+            <Relationship Id="rId1" Target="/ppt/slides/slide1.xml"/>
+            </Relationships>''')
+        archive.writestr('ppt/slides/slide1.xml', '''<p:sld
+            xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+            <a:t>Absolute targets</a:t><a:blip r:embed="rId2"/></p:sld>''')
+        archive.writestr('ppt/slides/_rels/slide1.xml.rels', '''<Relationships>
+            <Relationship Id="rId2" Target="/ppt/media/image.png"/>
+            </Relationships>''')
+        archive.writestr('ppt/media/image.png', image.getvalue())
+
+    document = api().read_document(source)
+
+    assert document.page_count == 1
+    assert 'Absolute targets' in document.text
+    assert len(document.images) == 1
 
 
 def test_text_and_image_limits_reject_full_document(tmp_path):

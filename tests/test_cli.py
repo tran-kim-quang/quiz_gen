@@ -1,4 +1,5 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -33,7 +34,10 @@ def test_watch_cli_processes_new_files_and_exits_at_limit(tmp_path, quiz, initia
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
             requests.append(body['messages'][1]['content'])
-            content = '{}' if fail_first and len(requests) == 1 else json.dumps(quiz)
+            result = deepcopy(quiz)
+            name = 'Nhóm A' if 'A/' in requests[-1] else 'Nhóm B'
+            result['title'] = f'Quiz Toán 7 - Bài 12: Tiết 36 - {name}'
+            content = '{}' if fail_first and len(requests) == 1 else json.dumps(result)
             payload = json.dumps({'done': True, 'message': {'content': content}}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
@@ -61,17 +65,20 @@ def test_watch_cli_processes_new_files_and_exits_at_limit(tmp_path, quiz, initia
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     try:
         deadline = time.monotonic() + 10
-        while not (output / '.quiz-state.json').exists() and time.monotonic() < deadline and process.poll() is None:
+        state_path = tmp_path / '.outputs-quiz-state.json'
+        while not state_path.exists() and time.monotonic() < deadline and process.poll() is None:
             time.sleep(0.05)
-        assert (output / '.quiz-state.json').exists()
+        assert state_path.exists()
         initial_folder = Path(initial_name).parent
-        initial_output = output / initial_folder / (initial_folder.name + '.json')
+        initial_title = 'Nhóm A' if initial_folder.name == 'A' else 'Nhóm B'
+        initial_output = output / f'Toan7/Bài 12_{initial_title}/T36_{initial_title}/quiz.json'
         assert initial_output.exists() is not fail_first
         add(next_name)
         stdout, stderr = process.communicate(timeout=10)
         assert process.returncode == expected_code, stderr
         next_folder = Path(next_name).parent
-        assert (output / next_folder / (next_folder.name + '.json')).exists()
+        next_title = 'Nhóm A' if next_folder.name == 'A' else 'Nhóm B'
+        assert (output / f'Toan7/Bài 12_{next_title}/T36_{next_title}/quiz.json').exists()
         assert len(requests) == 2 and next_name in requests[1]
         assert 'test-secret' not in stdout + stderr
     finally:

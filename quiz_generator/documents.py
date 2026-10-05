@@ -45,13 +45,24 @@ def _jpeg(raw: bytes, image_edge: int) -> bytes:
         return output.getvalue()
 
 
+def _part_target(base: str, target: str) -> str:
+    """Resolve both relative and package-absolute OPC relationship targets."""
+    target = target.replace('\\', '/')
+    resolved = posixpath.normpath(
+        target.lstrip('/') if target.startswith('/') else posixpath.join(base, target)
+    )
+    if resolved in ('.', '..') or resolved.startswith('../') or resolved.startswith('/'):
+        raise ValueError('Đường dẫn quan hệ trong PPTX không hợp lệ.')
+    return resolved
+
+
 def _slides(archive: ZipFile) -> list[str]:
     # PowerPoint can reorder slides without renaming slideN.xml.
     if 'ppt/presentation.xml' in archive.namelist():
         presentation = ET.fromstring(archive.read('ppt/presentation.xml'))
         rels = ET.fromstring(archive.read('ppt/_rels/presentation.xml.rels'))
         targets = {r.attrib['Id']: r.attrib['Target'] for r in rels}
-        return [posixpath.normpath(posixpath.join('ppt', targets[s.attrib[R + 'id']]))
+        return [_part_target('ppt', targets[s.attrib[R + 'id']])
                 for s in presentation.iter(P + 'sldId')]
     return sorted(
         (n for n in archive.namelist() if re.fullmatch(r'ppt/slides/slide\d+\.xml', n)),
@@ -113,7 +124,7 @@ def read_document(
                     for blip in slide.iter(A + 'blip'):
                         target = targets.get(blip.attrib.get(R + 'embed'))
                         if target:
-                            target = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+                            target = _part_target(posixpath.dirname(name), target)
                             if not target.startswith('ppt/media/'):
                                 raise ValueError(f'Ảnh slide {number} có đường dẫn không hỗ trợ.')
                             try:

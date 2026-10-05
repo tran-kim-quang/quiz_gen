@@ -86,7 +86,8 @@ def test_browser_folder_restores_tree_and_downloads_zip(ui_server, tmp_path, qui
             page.get_by_role('link', name='Tải toàn bộ ZIP').click()
         with ZipFile(BytesIO(open(download.value.path(), 'rb').read())) as archive:
             assert set(archive.namelist()) == {
-                'Lớp 7/Môn/Toán/Bài 12/Tiết 36/Tiết 36.json',
+                'Toan7/Bài 12_Tổng các góc trong một tam giác/'
+                'T36_Tổng các góc trong một tam giác/quiz.json',
             }
         page.reload()
         expect(page.locator('#job-status')).to_have_text('Hoàn tất')

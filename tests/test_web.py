@@ -1,4 +1,5 @@
 from io import BytesIO
+from copy import deepcopy
 import json
 import threading
 import time
@@ -28,6 +29,12 @@ def factory(quiz, handler=None):
     return lambda: OllamaGenerator('secret-not-in-ui', 'gemma4:31b', 'SYSTEM',
                                   client=httpx.Client(transport=httpx.MockTransport(handler)),
                                   retry_delay=0, max_attempts=1)
+
+
+BULK_PATH = (
+    'Toan7/Bài 12_Tổng các góc trong một tam giác/'
+    'T36_Tổng các góc trong một tam giác/quiz.json'
+)
 
 
 def submit(client, paths, kind='folder'):
@@ -65,7 +72,7 @@ def test_folder_upload_normalizes_before_llm_and_downloads_original_tree(tmp_pat
         assert 'Lớp 7/' not in seen[0]
         archive = client.get(f"/api/jobs/{job['id']}/download")
         with ZipFile(BytesIO(archive.content)) as zipfile:
-            assert set(zipfile.namelist()) == {'Lớp 7/Môn/Toán/Bài 12/Tiết 36/Tiết 36.json'}
+            assert set(zipfile.namelist()) == {BULK_PATH}
             for name in zipfile.namelist():
                 assert json.loads(zipfile.read(name))['title'] == quiz['title']
         file_id = job['files'][0]['id']
@@ -82,7 +89,18 @@ def test_single_file_and_accent_collisions(tmp_path, quiz):
         response = submit(client, ['Đề.pdf'], 'file')
         job = wait_job(client, response.json()['id'])
         with ZipFile(BytesIO(client.get(f"/api/jobs/{job['id']}/download").content)) as archive:
-            assert archive.namelist() == ['Đề.pdf.json']
+            assert archive.namelist() == [BULK_PATH]
+
+        def distinct_handler(request):
+            content = json.loads(request.content)['messages'][1]['content']
+            result = deepcopy(quiz)
+            result['title'] = (
+                'Quiz Toán 7 - Bài 12: Tiết 36 - Nhóm B'
+                if 'Ma--' in content else
+                'Quiz Toán 7 - Bài 12: Tiết 36 - Nhóm A'
+            )
+            return httpx.Response(200, json={'done': True, 'message': {'content': json.dumps(result)}})
+        client.app.state.manager.generator_factory = factory(quiz, distinct_handler)
         response = submit(client, ['Root/Má/Đề.pdf', 'Root/Ma/Đề.pdf', 'Root/Má/De.pdf'])
         job = wait_job(client, response.json()['id'])
         assert len({file['normalized_path'] for file in job['files']}) == 2

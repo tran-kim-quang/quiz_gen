@@ -33,7 +33,7 @@
     </header>
     <main>
       <div class="page-heading">
-        <div><div class="eyebrow">TỪ TÀI LIỆU ĐẾN TRI THỨC</div><h1>Bài học vào. <span>Quiz sẵn sàng.</span></h1><p>Chọn tài liệu của bạn, tạo bài kiểm tra và giữ nguyên cách bạn sắp xếp bài học.</p></div>
+        <div><div class="eyebrow">TỪ TÀI LIỆU ĐẾN TRI THỨC</div><h1>Bài học vào. <span>Quiz sẵn sàng.</span></h1><p>Chọn tài liệu, tạo bài kiểm tra và nhận output theo cấu trúc bulk upload.</p></div>
         <div class="heading-badge"><span data-icon="check-circle"></span><span>10 câu hỏi<small>mỗi tài liệu</small></span></div>
       </div>
       <div class="steps" aria-label="Các bước tạo quiz">
@@ -71,11 +71,11 @@
         </div>
 
         <div class="card tree-card">
-          <div class="card-heading"><div><span class="section-label">CẤU TRÚC THƯ MỤC</span><h2>Mọi bài học, đúng vị trí</h2></div><span class="soft-icon" data-icon="folder-tree"></span></div>
-          <p class="card-description">Quiz được xuất theo đúng các cấp thư mục bạn chọn.</p>
-          <div class="tree-toolbar"><span id="tree-caption">ĐẦU RA</span><div class="view-toggle"><button id="original-view" class="active">Tên gốc</button><button id="normalized-view">Tên xử lý</button></div></div>
+          <div class="card-heading"><div><span class="section-label">CẤU TRÚC THƯ MỤC</span><h2>Nhóm nguồn và output</h2></div><span class="soft-icon" data-icon="folder-tree"></span></div>
+          <p class="card-description">Trước khi sinh, cây hiển thị nhóm nguồn. Output hoàn thành lấy đường dẫn bulk upload từ title quiz.</p>
+          <div class="tree-toolbar"><span id="tree-caption">NHÓM NGUỒN</span><div class="view-toggle"><button id="original-view" class="active">Tên gốc</button><button id="normalized-view">Tên xử lý</button></div></div>
           <div class="path-tree" id="path-tree"><div class="tree-empty"><span data-icon="folder-tree"></span><strong>Cây thư mục của bạn</strong><p>Chọn nguồn để xem trước<br>vị trí của từng file quiz.</p></div></div>
-          <div class="mapping-note"><span data-icon="arrow-left-right"></span><p>Không dấu khi xử lý.<br><strong>Đúng tên gốc khi xuất kết quả.</strong></p><span class="preserve-badge">GIỮ NGUYÊN DẤU</span></div>
+          <div class="mapping-note"><span data-icon="arrow-left-right"></span><p>Không dấu khi xử lý.<br><strong>Xuất theo Course/Bài/Tiết/quiz.json.</strong></p><span class="preserve-badge">BULK UPLOAD</span></div>
         </div>
       </section>
 
@@ -98,6 +98,6 @@
   </div>
 
   <dialog id="quiz-dialog" class="quiz-dialog" aria-labelledby="quiz-title"><div class="dialog-heading"><span class="section-label">XEM QUIZ</span><button class="icon-button" id="close-quiz" aria-label="Đóng xem quiz"><span data-icon="x"></span></button></div><h2 id="quiz-title"></h2><p id="quiz-description"></p><div id="quiz-questions"></div><div class="dialog-footer"><a id="modal-download" class="primary-button">Tải JSON <span data-icon="download"></span></a></div></dialog>
-  <dialog id="help-dialog" class="help-dialog" aria-labelledby="help-title"><div class="dialog-heading"><span class="section-label">HƯỚNG DẪN NHANH</span><button class="icon-button" id="close-help" aria-label="Đóng hướng dẫn"><span data-icon="x"></span></button></div><h2 id="help-title">Ba bước để có quiz của bạn</h2><ol><li><strong>Chọn nguồn.</strong> Dùng Một file cho một PDF/PPTX, hoặc Cả thư mục để lấy tài liệu trong mọi thư mục con.</li><li><strong>Bắt đầu tạo quiz.</strong> Mỗi folder cuối cùng được xử lý một lần; tất cả PDF/PPTX trực tiếp trong folder đó cùng làm nguồn cho một quiz.</li><li><strong>Xem và tải kết quả.</strong> Xem trước từng quiz, tải riêng JSON hoặc tải toàn bộ ZIP với cây thư mục và tên có dấu nguyên bản.</li></ol><p class="help-note">Chỉ tên bản làm việc được bỏ dấu. Mỗi lần gọi model chỉ dùng dữ liệu của một folder lá; output lấy tên folder lá và giữ nguyên dấu.</p></dialog>
+  <dialog id="help-dialog" class="help-dialog" aria-labelledby="help-title"><div class="dialog-heading"><span class="section-label">HƯỚNG DẪN NHANH</span><button class="icon-button" id="close-help" aria-label="Đóng hướng dẫn"><span data-icon="x"></span></button></div><h2 id="help-title">Ba bước để có quiz của bạn</h2><ol><li><strong>Chọn nguồn.</strong> Dùng Một file cho một PDF/PPTX, hoặc Cả thư mục để lấy tài liệu trong mọi thư mục con.</li><li><strong>Bắt đầu tạo quiz.</strong> Mỗi folder cuối cùng được xử lý một lần; tất cả PDF/PPTX trực tiếp trong folder đó cùng làm nguồn cho một quiz.</li><li><strong>Xem và tải kết quả.</strong> Xem trước từng quiz, tải riêng JSON hoặc tải toàn bộ ZIP theo cấu trúc của tool upload quiz hàng loạt.</li></ol><p class="help-note">Mỗi lần gọi model chỉ dùng dữ liệu của một folder lá. Có thể giải nén ZIP trực tiếp vào thư mục quiz của tool upload.</p></dialog>
 </body>
 </html>

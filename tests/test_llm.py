@@ -16,6 +16,31 @@ def test_valid_quiz_and_path_metadata(quiz):
     assert api().validate_quiz(json.dumps(quiz), 'Lop7/Mon/Toan7/Bai12/Tiet36/source.pdf') == quiz
 
 
+def test_valid_special_lesson_quiz_and_path_metadata(quiz):
+    quiz['title'] = (
+        'Quiz Toán 7 - Luyện tập chung 1 _ chương II: '
+        'Tiết 22 - Luyện tập chung chương II'
+    )
+
+    assert api().validate_quiz(
+        json.dumps(quiz),
+        'Lop7/Toan7/Luyện tập chung 1 _ chương II/Tiet22/source.pptx',
+    ) == quiz
+
+
+def test_special_lesson_title_must_match_source_folder(quiz):
+    quiz['title'] = (
+        'Quiz Toán 7 - Luyện tập chung chương II: '
+        'Tiết 22 - Luyện tập chung chương II'
+    )
+
+    with pytest.raises(ValueError, match='tên bài đặc biệt'):
+        api().validate_quiz(
+            json.dumps(quiz),
+            'Lop7/Toan7/Luyện tập chung 1 _ chương II/Tiet22/source.pptx',
+        )
+
+
 @pytest.mark.parametrize('change', [
     lambda q: q.update(extra='not allowed'),
     lambda q: q['questions'].pop(),
@@ -79,6 +104,35 @@ def test_ollama_request_has_prompt_source_images_and_retries_invalid_json(quiz):
     assert len(requests) == 2
     assert requests[1]['messages'][-1]['role'] == 'user'
     assert '{}' in [m['content'] for m in requests[1]['messages']]
+
+
+def test_latex_retry_explicitly_forbids_backslash_characters(quiz):
+    from quiz_generator.documents import Document
+    attempts = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        attempts.append(body)
+        if len(attempts) == 1:
+            invalid = deepcopy(quiz)
+            invalid['questions'][0]['explanation'] = r'Giá trị là \frac{1}{2}.'
+            content = json.dumps(invalid)
+        else:
+            repair = body['messages'][-1]['content']
+            assert 'không được chứa ký tự backslash' in repair
+            assert 'Unicode hoặc chữ' in repair
+            content = json.dumps(quiz)
+        return httpx.Response(200, json={'done': True, 'message': {'content': content}})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        generator = api().OllamaGenerator(
+            'test', 'gemma4:31b', 'SYS', client=client, retry_delay=0,
+        )
+        result = generator.generate(Document('source', [], 1), 'source.pdf')
+
+    assert result['title'] == quiz['title']
+    assert len(result['questions']) == 10
+    assert len(attempts) == 2
 
 
 @pytest.mark.parametrize('status', [429, 500, 503])

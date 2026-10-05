@@ -135,10 +135,14 @@ async function selectFiles(files) {
 function renderTree() {
   $('original-view').classList.toggle('active', state.view === 'original');
   $('normalized-view').classList.toggle('active', state.view === 'normalized');
-  $('tree-caption').textContent = state.view === 'original' ? 'ĐẦU RA' : 'INPUT KHÔNG DẤU';
   const container = $('path-tree');
   container.replaceChildren();
   const files = state.preview?.groups || state.job?.files;
+  const showingPreview = Boolean(state.preview);
+  const hasFinalOutput = !showingPreview && files?.some(file => file.output);
+  $('tree-caption').textContent = state.view === 'original'
+    ? (hasFinalOutput ? 'ĐẦU RA BULK UPLOAD' : 'NHÓM NGUỒN — OUTPUT LẤY TỪ TITLE')
+    : 'INPUT KHÔNG DẤU';
   if (!files?.length) {
     const empty = node('div', 'tree-empty'); const mark = node('span'); mark.append(icon('folder-tree'));
     empty.append(mark, node('strong', '', 'Cây thư mục của bạn'), node('p', '', 'Chọn nguồn để xem trước vị trí của từng file quiz.'));
@@ -146,9 +150,11 @@ function renderTree() {
   }
   const root = new Map();
   files.slice(0, 200).forEach(file => {
-    const path = state.view === 'normalized'
-      ? (file.normalized_output || file.normalized_path + '.json')
-      : (file.output || file.target_output || file.path + '.json');
+    const path = showingPreview
+      ? (state.view === 'normalized' ? file.normalized_path : file.path)
+      : state.view === 'normalized'
+        ? (file.normalized_output || file.normalized_path + '.json')
+        : (file.output || file.target_output || file.path + '.json');
     const parts = path.split('/'); let children = root;
     parts.forEach((part, index) => {
       if (!children.has(part)) children.set(part, {name: part, file: index === parts.length - 1, children: new Map()});

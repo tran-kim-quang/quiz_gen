@@ -13,7 +13,10 @@ import httpx
 from .documents import Document
 
 LOG = logging.getLogger(__name__)
-TITLE = re.compile(r'^Quiz (?P<subject>.+?) (?P<grade>\d{1,2}) - Bài (?P<lesson>\d+): (?P<period>.+?) - (?P<name>.+)$')
+TITLE = re.compile(
+    r'^Quiz (?P<subject>.+?) (?P<grade>\d{1,2}) - '
+    r'(?P<lesson_label>.+?): (?P<period>.+?) - (?P<name>.+)$'
+)
 
 
 class APIError(RuntimeError):
@@ -31,11 +34,17 @@ def _fold(value: str) -> str:
 
 def path_metadata(relative_path: str) -> dict:
     result = {}
-    for part in PurePosixPath(relative_path).parts[:-1]:
+    parts = PurePosixPath(relative_path).parts[:-1]
+    period_index = None
+    for index, part in enumerate(parts):
         for key, prefix in (('grade', 'lop'), ('lesson', 'bai'), ('period', 'tiet')):
             match = re.fullmatch(prefix + r'[\s_-]*(\d+)', _fold(part))
             if match:
                 result[key] = int(match.group(1))
+                if key == 'period':
+                    period_index = index
+    if period_index and 'lesson' not in result:
+        result['lesson_name'] = parts[period_index - 1]
     return result
 
 
@@ -71,15 +80,28 @@ def validate_quiz(raw: str, relative_path: str = '') -> dict:
     _text(quiz['description'], 'description')
     title = TITLE.fullmatch(quiz['title'])
     if not title or not 1 <= int(title['grade']) <= 12:
-        raise ValueError('title phải đúng mẫu Quiz [MÔN] [LỚP] - Bài [SỐ]: [TÊN TIẾT] - [TÊN BÀI].')
+        raise ValueError(
+            'title phải có dạng Quiz [MÔN] [LỚP] - '
+            'Bài [SỐ] hoặc [TÊN BÀI ĐẶC BIỆT]: [TÊN TIẾT] - [TÊN BÀI].'
+        )
     if re.search(r'\[[^]]+\]', quiz['title']):
         raise ValueError('title còn chứa placeholder chưa thay thế.')
+    numbered_lesson = re.fullmatch(r'bai[\s_-]*(\d+)', _fold(title['lesson_label']))
+    title_metadata = {
+        'grade': int(title['grade']),
+        'lesson': int(numbered_lesson.group(1)) if numbered_lesson else None,
+        'lesson_name': title['lesson_label'].strip() if not numbered_lesson else None,
+    }
+    period_match = re.match(r'Tiết\s+(\d+)(?:\b|$)', title['period'])
+    title_metadata['period'] = int(period_match.group(1)) if period_match else -1
     for key, expected in path_metadata(relative_path).items():
-        actual = title[key]
-        if key == 'period':
-            match = re.match(r'Tiết\s+(\d+)(?:\b|$)', actual)
-            actual = match.group(1) if match else '-1'
-        if int(actual) != expected:
+        actual = title_metadata[key]
+        if key == 'lesson_name':
+            if actual != expected:
+                raise ValueError(
+                    f'title: tên bài đặc biệt phải là "{expected}" theo đường dẫn nguồn.'
+                )
+        elif actual != expected:
             raise ValueError(f'title: {key} phải là {expected} theo đường dẫn nguồn.')
     questions = quiz['questions']
     if not isinstance(questions, list) or len(questions) != 10:
@@ -198,11 +220,18 @@ class OllamaGenerator:
                         return quiz
                     except (ValueError, TypeError, KeyError) as error:
                         last_error = ValueError(str(error))
+                        repair_detail = ''
+                        if 'LaTeX/backslash' in str(last_error):
+                            repair_detail = (
+                                ' không được chứa ký tự backslash trong bất kỳ nội dung nào; '
+                                'viết lại mọi công thức bằng ký hiệu Unicode hoặc chữ.'
+                            )
                         # Keep source once; replace only the last repair turn.
                         messages = messages[:2] + [
                             {'role': 'assistant', 'content': raw if isinstance(raw, str) else ''},
                             {'role': 'user', 'content': f'JSON chưa hợp lệ: {last_error}. '
-                             'Đọc lại nguồn và xuất lại toàn bộ JSON đúng yêu cầu; không thêm lời dẫn.'},
+                             f'{repair_detail} Đọc lại nguồn và xuất lại toàn bộ JSON đúng yêu cầu; '
+                             'không thêm lời dẫn.'},
                         ]
             except httpx.RequestError:
                 last_error = APIError('Không kết nối được Ollama hoặc request hết thời gian chờ.')

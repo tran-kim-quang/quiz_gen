@@ -4,6 +4,7 @@
 import argparse
 import logging
 from pathlib import Path
+import sys
 import time
 
 from quiz_generator.config import create_generator
@@ -16,7 +17,7 @@ LOG = logging.getLogger('quiz_generator')
 
 
 def parser():
-    result = argparse.ArgumentParser(description='Sinh một JSON quiz cho mỗi folder lá, giữ nguyên cây thư mục.')
+    result = argparse.ArgumentParser(description='Sinh một JSON quiz cho mỗi folder lá theo cấu trúc bulk upload.')
     result.add_argument('--documents', type=Path, default=ROOT / 'documents', help='Thư mục nguồn (quét đệ quy).')
     result.add_argument('--output', type=Path, default=ROOT / 'outputs', help='Thư mục lưu JSON.')
     result.add_argument('--env-file', type=Path, default=ROOT / '.env', help='File chứa API key và model.')
@@ -35,6 +36,9 @@ def parser():
 
 
 def main(argv=None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(errors='backslashreplace')
     argument_parser = parser()
     args = argument_parser.parse_args(argv)
     if not 0 < args.interval <= 60:
@@ -51,7 +55,7 @@ def main(argv=None) -> int:
         plans = plan_source_units(relative_sources, root_name=args.documents.name)
         if args.list:
             for plan in plans:
-                print(f'{plan.path} ({len(plan.relative_paths)} tài liệu) -> {plan.output}')
+                print(f'{plan.path} ({len(plan.relative_paths)} tài liệu) -> output lấy từ title quiz')
                 for source in plan.relative_paths:
                     print(f'  - {source}')
             print(f'Tổng: {len(plans)} folder lá, {len(sources)} tài liệu.')

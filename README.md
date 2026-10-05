@@ -20,7 +20,7 @@ Nút **Dừng sau folder này** cho folder đang gọi LLM hoàn thành rồi d�
 
 Giao diện dùng cùng `.env` và `prompt.py` với CLI; không đưa API key lên trình duyệt. Có thể upload thêm file/folder khi một lượt đang chạy: mỗi batch mới vào hàng đợi FIFO, và toàn hệ thống chỉ gọi LLM cho một folder lá tại một thời điểm.
 
-### Normalize tên và giữ đúng dấu khi xuất
+### Normalize input và output cho tool upload hàng loạt
 
 Giao diện **copy** nguồn vào vùng làm việc, bỏ dấu trong từng tên file/thư mục trước khi bắt đầu xử lý. Giữ nguyên chữ hoa, khoảng trắng và các cấp thư mục. Tài liệu gốc trên máy không bị đổi tên.
 
@@ -34,15 +34,17 @@ Lop 7/Mon/Toan/Bai 12/Tiet 36/De.pdf
 Lop 7/Mon/Toan/Bai 12/Tiet 36/Bai tap.pptx
 
 Output trên đĩa:
-outputs/ui/<job-id>/Lớp 7/Môn/Toán/Bài 12/Tiết 36/Tiết 36.json
+outputs/ui/<job-id>/Toan7/Bài 12_Tổng các góc trong một tam giác/T36_Tổng các góc trong một tam giác/quiz.json
 
 Bên trong ZIP:
-Lớp 7/Môn/Toán/Bài 12/Tiết 36/Tiết 36.json
+Toan7/Bài 12_Tổng các góc trong một tam giác/T36_Tổng các góc trong một tam giác/quiz.json
 ```
 
-Bảng ánh xạ được lưu tại `.quiz-ui/jobs/<job-id>/path-mapping.json`. Output lấy lại **tên gốc chính xác** từ bảng này, kể cả Unicode tổ hợp; không đoán ngược dấu từ tên đã normalize. Nếu các tên như `Má` và `Ma` trùng sau bỏ dấu, bản làm việc thêm suffix riêng, còn output vẫn giữ tên gốc.
+Bảng ánh xạ input được lưu tại `.quiz-ui/jobs/<job-id>/path-mapping.json`. Output lấy môn, lớp, bài, tiết và tên bài từ `title` đã được kiểm tra, rồi dùng tên course folder theo cây `QUIZ LAM LAI`: `Toan7`, `VatLy7`, `Hoa7`, `Sinh7`, `Van7`, `Su7`, `DiaLy7`, `Anh7`, `Tin7`, `CongNghe7`, `GDCD7`; lớp 10–12 dùng `GDKTPL10`–`GDKTPL12` cho Giáo dục kinh tế và pháp luật.
 
-Chế độ File đơn giữ basename gốc khi xuất, không thêm folder từ máy tính. Chế độ Folder tạo một JSON mang tên folder lá, giữ cả tên folder gốc đã chọn và mọi cấp con. ZIP chỉ chứa JSON quiz, không chứa input, state hoặc key.
+Bài đặc biệt không có số được giữ nguyên tên folder nguồn, ví dụ `Luyện tập chung 1 _ chương II/T22_.../quiz.json` hoặc `Bài tập cuối chương II/T24_.../quiz.json`. Với nguồn dạng này, đặt folder bài ngay phía trên folder `Tiet <số>`; validator buộc model chép nguyên tên folder vào title và formatter tạo slug giống tool upload Node.
+
+Mỗi JSON có `type: "LESSON"`, `order` 1-based cho câu hỏi và đáp án. ZIP chỉ chứa JSON quiz theo cấu trúc `Course/Bài/Tiết/quiz.json`, không chứa input, state hoặc key; có thể giải nén trực tiếp vào thư mục `quiz` của tool upload hàng loạt.
 
 Ứng dụng không đặt giới hạn số file hoặc tổng dung lượng upload. Khả năng thực tế phụ thuộc dung lượng ổ đĩa, bộ nhớ, giới hạn HTTP/trình duyệt và context của model. Folder có file khác PDF/PPTX sẽ bỏ qua các file đó và thông báo số lượng. Cây thư mục không thể lưu output do tên file/thư mục xung đột sẽ được báo trước khi gọi LLM. Nút chọn folder nên dùng Chrome/Edge/Firefox bản mới hỗ trợ directory picker.
 
@@ -55,7 +57,7 @@ Khi upload nhiều:
 
 ## Cài đặt
 
-Yêu cầu Python 3.10+ trên Linux/macOS (khóa worker dùng `fcntl`).
+Yêu cầu Python 3.10+ trên Windows, Linux hoặc macOS.
 
 ```bash
 python -m venv .venv
@@ -120,13 +122,16 @@ documents/
     └── TOAN7_C4_B12_T36_2_fixed.pptx
 
 outputs/
-├── .quiz-state.json
 ├── .quiz-worker.lock
-└── Lop/Lop7/Mon/Toan7/Bai12/Tiet36/
-    └── Tiet36.json
+└── Toan7/
+    └── Bài 12_Tổng các góc trong một tam giác/
+        └── T36_Tổng các góc trong một tam giác/
+            └── quiz.json
+
+.outputs-quiz-state.json
 ```
 
-Tên JSON lấy theo folder lá. Không suy diễn hoặc đổi tên các cấp thư mục; mọi cấp lớp/môn/[Môn học]/[Bài]/[Tiết] được giữ nguyên.
+Đường dẫn JSON lấy từ `title` hợp lệ và tuân thủ đúng bốn tầng mà `scripts/local-quiz-manifest.mjs` yêu cầu. Với title có cả tên tiết và tên bài, ví dụ `Tiết 3: Getting Started - Family Life - Family Life`, output là `Anh10/Bài 1_Family Life/T3_Getting Started - Family Life/quiz.json`. Nếu hai nguồn ánh xạ tới cùng khóa học/bài/tiết theo slug của importer, lượt thứ hai báo lỗi thay vì ghi đè quiz trước.
 
 - **PDF:** gửi text trích xuất và ảnh của từng trang để model đọc cả công thức, hình minh họa, bản scan. PDF có mật khẩu cần được mở khóa trước.
 - **PPTX:** gửi text và ảnh nhúng theo thứ tự slide. PPTX đang có trong dự án gồm 20 slide ảnh và được hỗ trợ theo cách này. Shape, biểu đồ hoặc bố cục PPTX phức tạp không được render hoàn chỉnh; hãy xuất thành PDF để giữ đủ hình thức trình bày.
@@ -134,7 +139,7 @@ Tên JSON lấy theo folder lá. Không suy diễn hoặc đổi tên các cấp
 
 Model lấy môn, lớp, bài, tiết và **tên bài từ nhóm tài liệu trong folder lá** cùng đường dẫn nguồn. Script kiểm tra lớp/bài/tiết nếu thư mục có dạng `Lop7`, `Bai12`, `Tiet36` (cũng hỗ trợ chữ có dấu và khoảng trắng). Không dùng tên bài trong ví dụ của prompt làm tên mặc định.
 
-JSON đúng các khóa của prompt: `title`, `description`, `questions`; đúng 10 câu, mỗi câu 4 lựa chọn và một đáp án đúng. Validator kiểm tra kiểu boolean, text rỗng, khóa thừa/thiếu/trùng, câu hỏi/phương án trùng, mẫu tiêu đề và ký tự LaTeX. Chương trình xáo trộn phương án để đáp án đúng xuất hiện 2–3 lần ở mỗi vị trí, giữ nguyên thứ tự độ khó của câu hỏi.
+JSON model trả về đúng các khóa của prompt: `title`, `description`, `questions`; đúng 10 câu, mỗi câu 4 lựa chọn và một đáp án đúng. Trước khi lưu, chương trình thêm `type: "LESSON"` cùng `order` cho câu hỏi và đáp án để tương thích tool upload. Validator kiểm tra kiểu boolean, text rỗng, khóa thừa/thiếu/trùng, câu hỏi/phương án trùng, mẫu tiêu đề và ký tự LaTeX. Chương trình xáo trộn phương án để đáp án đúng xuất hiện 2–3 lần ở mỗi vị trí, giữ nguyên thứ tự độ khó của câu hỏi.
 
 Validator kiểm tra cấu trúc; độ chính xác kiến thức, mức độ khó và chất lượng phương án nhiễu vẫn cần được xem lại trước khi dùng cho học sinh.
 
@@ -142,7 +147,9 @@ Validator kiểm tra cấu trúc; độ chính xác kiến thức, mức độ k
 
 Lỗi mạng, timeout, HTTP 408/429/5xx và JSON sai được thử lại tối đa 3 lần, tính cả lần đầu. Nếu JSON sai, request tiếp theo giữ nguồn và yêu cầu model sửa. Lỗi key/quyền truy cập/model hoặc endpoint (401/403/404) dừng worker. Folder khác bị lỗi được ghi nhận và không ngăn folder tiếp theo.
 
-State lưu fingerprint của nội dung nguồn, system prompt, model, host, cấu hình sinh và cấu hình đọc. Nguồn/prompt/model đổi, output bị mất hoặc JSON sai thì sinh lại. JSON và state được ghi atomic. Chỉ một worker được dùng cùng thư mục output; khóa tự nhả khi tiến trình kết thúc.
+State lưu fingerprint của nội dung nguồn, system prompt, model, host, cấu hình sinh và cấu hình đọc. Nguồn/prompt/model đổi, output bị mất hoặc JSON sai thì sinh lại. State CLI nằm cạnh thư mục output (`.outputs-quiz-state.json` với output mặc định); state của UI nằm trong `.quiz-ui/jobs`. Vì vậy cây output chỉ chứa JSON mà tool upload có thể nhập. JSON và state được ghi atomic. Chỉ một worker được dùng cùng thư mục output; khóa tự nhả khi tiến trình kết thúc.
+
+Khi một folder nguồn bị xóa hoặc đổi tên, state và JSON do folder cũ sở hữu được gỡ khỏi cây output ở lượt quét tiếp theo. Folder mới sau đó có thể tạo lại đúng target mà không bị chặn bởi kết quả đã stale.
 
 Trong `--watch`, file lỗi được thử lại sau 300 giây; đổi bằng `--failure-cooldown`. Nguồn thay đổi được thử lại ngay ở lượt quét sau. Để thử lại ngay cả khi chưa hết cooldown:
 
